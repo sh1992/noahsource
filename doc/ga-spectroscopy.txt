@@ -1,0 +1,39 @@
+Usage: ga-spectroscopy [options]
+
+General GA options:
+
+-c, --config FILE
+Load a configuration file. Configuration files are formatted
+similarly to the command line. For example, a configuration
+file to set the population size to 64 would have the line
+"population 64".
+
+-h, --help
+Display usage message.
+
+-g, --generations NUMBER
+The number of generations to run for before stopping.
+
+-p, --population NUMBER
+The number of individuals in the population.
+
+Problem-specific options:
+
+-o, --output FILE
+Use FILE.{cat,int,out,var} for temporary and output storage.
+(default is random name of the form "tmp-gaspec-XXX")
+
+-t, --template FILE
+Use FILE.{int,var} as a template to generate SPCAT input.
+(default "template")
+
+-m, --match FILE
+Match against FILE, formatted as an SPCAT .cat file.  (default
+"isopropanol.cat")
+
+-S, --spcat FILE
+SPCAT program file. (default "./spcat")
+
+-b, --bins NUMBER
+Number of bins for matching. (default at time of writing was
+600)
