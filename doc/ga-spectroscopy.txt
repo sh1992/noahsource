@@ -23,6 +23,10 @@ generator. Use the same seed to obtain the same result. Note
 that the random numbers generated may be different on different
 computers, even when using the same seed.
 
+-D, --debug
+If specified, write all log messages to stdout INSTEAD of
+FILE.log (see --output). Only applicable to ga-spectroscopy.
+
 Problem-specific options:
 
 -o, --output FILE
@@ -43,3 +47,6 @@ SPCAT program file. (default "./spcat")
 -b, --bins NUMBER
 Number of bins for matching. (default at time of writing was
 600)
+
+-w, --weight NUMBER
+Weight of intensity vs peak count when evaluating each bin.

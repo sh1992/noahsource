@@ -106,6 +106,7 @@ typedef struct {
   char *obsfile;
   char *spcatbin;
   unsigned int bins;
+  float distanceweight;
 } specopts_t;
 specopts_t specopts;
 
@@ -148,7 +149,9 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 'b':
     ((specopts_t *)settings->ref)->bins = atoi(optarg);
     break;
-
+  case 'w':
+    ((specopts_t *)settings->ref)->distanceweight = atof(optarg);
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -189,6 +192,10 @@ int main(int argc, char *argv[]) {
      * Number of bins for matching. (default at time of writing was
      * 600) */
     {"bins",     required_argument, 0, 'b'},
+    /** -w, --weight NUMBER
+     *
+     * Weight of intensity vs peak count when evaluating each bin. */
+    {"weight",     required_argument, 0, 'w'},
     {0, 0, 0, 0}
   };
   int rc = 0;
@@ -204,7 +211,8 @@ int main(int argc, char *argv[]) {
   specopts.obsfile = "isopropanol.cat";
   specopts.spcatbin = "./spcat";
   specopts.bins = BINS;
-  GA_getopt(argc,argv, &settings, "o:t:m:b:S:", my_long_options, my_parseopt,
+  specopts.distanceweight = 1.0;
+  GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:", my_long_options, my_parseopt,
 	    gaspectroscopy_usage);
 
   /* Choose temporary file */
@@ -399,7 +407,7 @@ int GA_fitness(const GA_session *ga, GA_individual *elem) {
 
   for ( i=0; i<observationcount || i<compdatacount; i++ ) {
     int j=0;
-    for ( j=0;j<=1;j++ ) {	/* Observed/Generated */
+    for ( j=0;j<=1;j++ ) {	/* 0=Observed / 1=Generated */
       datarow entry;
       if ( j == 0 ) {		/* j == 0, observation (Observed) */
 	if ( i < observationcount ) entry = observation[i];
@@ -418,11 +426,14 @@ int GA_fitness(const GA_session *ga, GA_individual *elem) {
       }
     }
   }
-  /* ???: Divide bin values by bincounts? */
+  /* Compute bin fitnesses using w*|X_o - Xc|^2 + (1-w)*|N_o - N_c|^2 */
   for ( i=0; i<opts->bins; i++ ) {
-    float comp = sqrtf(powf(fabs(expf(obsbin[i])-expf(compbin[i])),2));
+    float comp = opts->distanceweight *
+      powf(fabs(expf(obsbin[i])-expf(compbin[i])),2) +
+      (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
     fitness += comp;
   }
+
 #if 0
   xi=0;
   /* Iterate over all y (generated) points, comparing to nearest x
@@ -440,6 +451,7 @@ int GA_fitness(const GA_session *ga, GA_individual *elem) {
     fitness += compa;
   }
 #endif
+
   elem->fitness = -fitness;
   /* printf("%u\n",elem->segments[0]); */
   /* elem->fitness = -fabs(64-(double)x[0]*x[0]); */
