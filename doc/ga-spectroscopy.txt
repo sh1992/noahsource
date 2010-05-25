@@ -1,4 +1,4 @@
-Usage: ga-spectroscopy [options]
+Usage: ./ga-spectroscopy [options]
 
 General GA options:
 
@@ -16,6 +16,12 @@ The number of generations to run for before stopping.
 
 -p, --population NUMBER
 The number of individuals in the population.
+
+-s, --seed NUMBER
+The random seed to use when initializing the random number
+generator. Use the same seed to obtain the same result. Note
+that the random numbers generated may be different on different
+computers, even when using the same seed.
 
 Problem-specific options:
 

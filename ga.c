@@ -32,6 +32,7 @@ int GA_init(GA_session *session, GA_settings *settings,
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
 
   /* Seed the PRNG */
+  printf("SEED %u\n", settings->randomseed);
   srandom(settings->randomseed);
   /* Zero out the GA_session object and set the fields from the parameters */
   memset(session, 0, sizeof(GA_session));
@@ -445,6 +446,9 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
    case 'p':			/* Population size */
      settings->popsize = atoi(optarg);
      break;
+   case 's':
+     settings->randomseed = atoi(optarg);
+     break;
    case 'h':
    case '?':
      /* getopt_long already printed an error message. */
@@ -494,13 +498,21 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
      * The number of individuals in the population.
      */
     {"population", required_argument, NULL, 'p'},
+    /** -s, --seed NUMBER
+     *
+     * The random seed to use when initializing the random number
+     * generator. Use the same seed to obtain the same result. Note
+     * that the random numbers generated may be different on different
+     * computers, even when using the same seed.
+     */
+    {"seed", required_argument, NULL, 's'},
     /*
       {"verbose", no_argument,       &verbose_flag, 1},
       {"brief",   no_argument,       &verbose_flag, 0},
     */
     {0, 0, 0, 0}
   };
-  static const char *global_optstring = "c:g:p:h";
+  static const char *global_optstring = "c:g:p:s:h";
   int c;
   struct option *long_options;
   struct option config_options[2] = {global_long_options[0],{0,0,0,0}};
