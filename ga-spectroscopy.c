@@ -24,6 +24,7 @@
 
 char spec_template[2][2048];
 char input_suffixes[2][4] = {"var", "int"};
+const char output_suffixes[2][4] = {"out", "cat"};
 int load_spec_templates(char *template_filename) {
   int i;
   memset(spec_template, 0, sizeof(spec_template));
@@ -221,7 +222,7 @@ int main(int argc, char *argv[]) {
   if ( specopts.basename == NULL ) specopts.basename = ".";
   {
     DIR *x = opendir(specopts.basename);
-    if ( x != NULL || ( errno != ENOTDIR) ) {
+    if ( x != NULL ) { /* || ( errno != ENOTDIR) ) { */
       char *dir = specopts.basename;
       if ( asprintf(&specopts.basename, "%s/tmp-gaspec-%d",
 		    dir, getpid()) == -1 ) {
@@ -232,7 +233,7 @@ int main(int argc, char *argv[]) {
     else {
       specopts.basename = strdup(specopts.basename);
       if ( !specopts.basename ) {
-	perror("Out of memory (basename dup)");
+	printf("Out of memory (basename dup)\n");
 	exit(1);
       }
     }
@@ -249,6 +250,19 @@ int main(int argc, char *argv[]) {
   if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
     printf("GA_evolve failed: %d\n", rc);
     return rc;
+  }
+
+  {
+    /* Remove stray temporary files */
+    char *filename;
+    if ( ( filename = malloc(strlen(specopts.template)+5) ) != NULL ) {
+      int i;
+      for ( i = 0; i < 2; i++ ) {
+	sprintf(filename, "%s.%s", specopts.basename, output_suffixes[i]);
+	unlink(filename);
+      }
+    }
+    else printf("Out of memory (nonfatal, but cleanup failed)\n");
   }
 
   /* Save best result */
