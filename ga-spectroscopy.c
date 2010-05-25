@@ -195,6 +195,7 @@ int main(int argc, char *argv[]) {
   int i;
 
   GA_defaultsettings(&settings);
+  settings.debugmode = 0;	/* Use non-verbose output */
   settings.popsize = 64;
   settings.generations = 200;
   settings.ref = &specopts;
@@ -206,18 +207,6 @@ int main(int argc, char *argv[]) {
   GA_getopt(argc,argv, &settings, "o:t:m:b:S:", my_long_options, my_parseopt,
 	    gaspectroscopy_usage);
 
-  /* Load SPCAT .int & .var input template files */
-  printf("Loading template files %s.{var,int}\n", specopts.template); 
-  if ( (rc = load_spec_templates(specopts.template)) != 0 ) {
-    printf("load_spec_templates failed: %d\n", rc);
-    return rc;
-  }
-  /* Load observed data file */
-  printf("Loading observation file %s\n", specopts.obsfile);
-  if ( (rc = load_spec_observation(specopts.obsfile)) != 0 ) {
-    printf("load_spec_observation failed: %d\n", rc);
-    return rc;
-  }
   /* Choose temporary file */
   if ( specopts.basename == NULL ) specopts.basename = ".";
   {
@@ -239,16 +228,55 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  printf("Using temporary file %s\n", specopts.basename);
+  /* Debug mode */
+  if ( !settings.debugmode ) {
+    FILE *fh;
+    char *filename;
+    int stdoutfd = dup(STDOUT_FILENO); /* Save real STDOUT. */
+    if ( ( filename = malloc(strlen(specopts.basename)+5) ) == NULL ) {
+      printf("Out of memory (log file)\n");
+      exit(1);
+    }
+    sprintf(filename, "%s.log", specopts.basename);
+    /* Open new STDOUT handle */
+    fflush(NULL);		       /* Flush output streams. */
+    if ( ( fh = freopen(filename, "w", stdout) ) == NULL ) {
+      perror("Failed to open log file");
+      free(filename);
+      exit(1);
+    }
+    free(filename);
+    dup2(fileno(fh), STDOUT_FILENO); /* Make sure fd #1 is STDOUT */
+    if ( ( settings.stdoutfh = fdopen(stdoutfd, "w") ) == NULL ) {
+      perror("Failed to reopen stdout");
+      exit(1);
+    }
+    qprintf(&settings, "Details saved in %s.log\n", specopts.basename);
+  }
+  
+  qprintf(&settings, "Using temporary file %s\n", specopts.basename);
+
+  /* Load SPCAT .int & .var input template files */
+  printf("Loading template files %s.{var,int}\n", specopts.template); 
+  if ( (rc = load_spec_templates(specopts.template)) != 0 ) {
+    qprintf(&settings, "load_spec_templates failed: %d\n", rc);
+    return rc;
+  }
+  /* Load observed data file */
+  printf("Loading observation file %s\n", specopts.obsfile);
+  if ( (rc = load_spec_observation(specopts.obsfile)) != 0 ) {
+    qprintf(&settings, "load_spec_observation failed: %d\n", rc);
+    return rc;
+  }
   printf("Using %d bins\n", specopts.bins);
 
   /* Run the genetic algorithm */
   if ( (rc = GA_init(&ga, &settings, 3)) != 0 ) {
-    printf("GA_init failed: %d\n", rc);
+    qprintf(&settings, "GA_init failed: %d\n", rc);
     return rc;
   }
   if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
-    printf("GA_evolve failed: %d\n", rc);
+    qprintf(&settings, "GA_evolve failed: %d\n", rc);
     return rc;
   }
 
@@ -262,7 +290,7 @@ int main(int argc, char *argv[]) {
 	unlink(filename);
       }
     }
-    else printf("Out of memory (nonfatal, but cleanup failed)\n");
+    else qprintf(&settings, "Out of memory (nonfatal, but cleanup failed)\n");
   }
 
   /* Save best result */
@@ -273,14 +301,14 @@ int main(int argc, char *argv[]) {
     /* Generate SPCAT input file */
     rc = generate_input_files(x);
     if ( rc != 0 ) {
-      printf("Final generate_input_files failed: %d\n", rc);
+      qprintf(&settings, "Final generate_input_files failed: %d\n", rc);
       return rc;
     }
-    printf("Best result saved in %s\n", specopts.basename);
+    qprintf(&settings, "Best result saved in %s\n", specopts.basename);
   }
   /* Cleanup */
   if ( (rc = GA_cleanup(&ga)) != 0 ) {
-    printf("GA_cleanup failed: %d\n", rc);
+    qprintf(&settings, "GA_cleanup failed: %d\n", rc);
     return rc;
   }
   free(specopts.basename);
@@ -341,7 +369,7 @@ int GA_fitness(const GA_session *ga, GA_individual *elem) {
     }
     else if ( rc == EOF ) break;
     else if ( rc != 2 ) {
-      printf("File format error\n");
+      qprintf(ga->settings, "File format error\n");
       return 14;
     }
     /* Allocate additional memory, if neccessary */
@@ -350,7 +378,7 @@ int GA_fitness(const GA_session *ga, GA_individual *elem) {
       printf("Increasing memory allocation to %u\n", compdatasize);
       compdata = realloc(compdata, sizeof(datarow)*compdatasize);
       if ( compdata == NULL ) {
-	printf("Out of memory\n");
+	qprintf(ga->settings, "Out of memory\n");
 	return 15;
       }
     }

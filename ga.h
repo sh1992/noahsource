@@ -42,6 +42,11 @@ typedef struct GA_settings_struct {
   unsigned int popsize;
   /** The number of generations to run for. */
   unsigned int generations;
+  /** If false, assume not in "debug mode", where stdout is redirected
+   * to a file, and the real stdout is available in stdoutfd. */
+  int debugmode;
+  /** Real stdout if debug mode is not active. \see debugmode */
+  FILE *stdoutfh;
   /** Pointer to problem-specific options structure (for use in
    * options parsing and fitness evaluation). */
   void *ref;
@@ -242,6 +247,14 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 	      const char *my_optstring, const struct option *my_long_options,
 	      GA_my_parseopt_t my_parse_option, char *my_usage);
 /* \} */
+
+/** Print a message both to the stdout and (unless in debug mode) the
+ * "real" stdout saved in GA_settings.stdoutfd.
+ *
+ * \see Ga_settings.debugmode
+ */
+int qprintf(GA_settings *settings, const char *format, ...);
+
 
 #define _HAVE_GA_H
 #endif

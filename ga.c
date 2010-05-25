@@ -3,17 +3,12 @@
  * Genetic algorithm implementation file.
  */
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "ga.h"
 #include "ga.usage.h"
-
-#ifdef DEBUG
-#define PRINT printf
-#else
-#define PRINT ;
-#endif
 
 int GA_defaultsettings(GA_settings *settings) {
     memset(settings, 0, sizeof(GA_settings));
@@ -22,6 +17,9 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->popsize = 64;
     settings->generations = 100;
     settings->ref = NULL;
+    /* Default debugmode to true, since the infrastructure to renumber
+     * file descriptors is not implemented in this library */
+    settings->debugmode = 1;
     /* Return success */
     return 0;
 }
@@ -32,7 +30,7 @@ int GA_init(GA_session *session, GA_settings *settings,
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
 
   /* Seed the PRNG */
-  printf("SEED %u\n", settings->randomseed);
+  qprintf(settings, "SEED %u\n", settings->randomseed);
   srandom(settings->randomseed);
   /* Zero out the GA_session object and set the fields from the parameters */
   memset(session, 0, sizeof(GA_session));
@@ -129,11 +127,11 @@ int GA_evolve(GA_session *session,
 	newb = (oldb & (~mask)) | (olda & mask);
 
 	/*
-	  PRINT("\nNITM %03d %03d %03d %03d\n",
+	  printf("\nNITM %03d %03d %03d %03d\n",
 	      session->generation+1, i, i+1, j);
 	*/
-	PRINT("XOVR %08x %3d %08x %3d to %08x %08x mask %2d %08x %08x\n",
-	      olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
+	printf("XOVR %08x %3d %08x %3d to %08x %08x mask %2d %08x %08x\n",
+	       olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
 
 	/* Mutation. Low-probability bitflip. */
 	if ( (double)random()/RAND_MAX < 0.5 ) {
@@ -141,14 +139,14 @@ int GA_evolve(GA_session *session,
 	  /* Consider: Bias towards less significant bits */
 	  bitpos = random()%GA_segment_size;
 	  mask = 1<<bitpos;
-	  PRINT("FLP%01x %08x     %08x     ",
-		afirst, newa, newb);
+	  printf("FLP%01x %08x     %08x     ",
+		 afirst, newa, newb);
 	  if ( afirst & 1 ) newa ^= mask;
 	  if ( afirst & 2 ) newb ^= mask;
-	  PRINT("to %08x %08x mask %2d %08x\n",
-		newa, newb, bitpos, mask);
+	  printf("to %08x %08x mask %2d %08x\n",
+		 newa, newb, bitpos, mask);
 	}
-	else PRINT("FLP0 %08x     %08x     \n", newa, newb);
+	else printf("FLP0 %08x     %08x     \n", newa, newb);
 	/* Insert new segments */
 	session->newpop[i].segments[j] = newa;
 	session->newpop[i+1].segments[j] = newb;
@@ -160,14 +158,14 @@ int GA_evolve(GA_session *session,
     session->newpop = temp;
     session->generation++;
     /* Check termination condition. */
-    PRINT("BKTS %03d ", session->generation);
+    printf("BKTS %03d ", session->generation);
     for ( i = 0; i < session->cachesize; i++ ) {
-      PRINT("%c", session->fitnesscache[i][0].unscaledfitness ? '#' : '.');
-      if ( i%64 == 63 ) PRINT("\n         ");
+      printf("%c", session->fitnesscache[i][0].unscaledfitness ? '#' : '.');
+      if ( i%64 == 63 ) printf("\n         ");
     }
-    /* PRINT("\n"); */
+    /* printf("\n"); */
 
-    PRINT("\n");
+    printf("\n");
     if ( GA_checkfitness(session) != 0 ) return 1;
     if ( GA_termination(session) ) return 0;
   }
@@ -181,14 +179,14 @@ unsigned int GA_roulette(const GA_session *session) {
   /* If all the choices have score 0, assign uniform nonzero scores to
    * all individuals. */
   double uniformroulette = 0;
-  /* PRINT("rand %d\n",(int)(index*64)); */
+  /* printf("rand %d\n",(int)(index*64)); */
   if ( session->fitnesssum <= 0 ) uniformroulette = 1.0/session->popsize;
-  /* PRINT("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
+  /* printf("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
   for ( i = 0; i < session->popsize; i++ ) {
     double score = (session->fitnesssum <= 0) ? uniformroulette :
       (1.0*session->population[i].fitness/session->fitnesssum);
     if ( index < score ) {
-      /* PRINT("roulette %7.5f < %7.5f %u\n", index, score, i); */
+      /* printf("roulette %7.5f < %7.5f %u\n", index, score, i); */
       return i;
     }
     index -= score;
@@ -279,16 +277,16 @@ int GA_checkfitness(GA_session *session) {
       fevs++;
       if ( ((rc = GA_fitness(session, &session->population[i])) != 0)
 	   || isnan(session->population[i].fitness) ) {
-	PRINT("fitness error %u %f => %d\n",
-	      session->population[i].segments[0],
-	      session->population[i].fitness, rc);
+	qprintf(session->settings, "fitness error %u %f => %d\n",
+		session->population[i].segments[0],
+		session->population[i].fitness, rc);
 	return 1;
       }
     }
 
     /* Announce caching status for segment use */ 
-    PRINT("FND%1d hash %08x bucket %3d orig %f\n",
-	  found, hashtemp, hashbucket, session->population[i].fitness);
+    printf("FND%1d hash %08x bucket %3d orig %f\n",
+	   found, hashtemp, hashbucket, session->population[i].fitness);
     /* Save the fitness in the cache */
     if ( ( found == 0 ) || ( found > 1 ) ) {
       if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 )
@@ -308,7 +306,7 @@ int GA_checkfitness(GA_session *session) {
     /* session->fitnesssum += session->population[i].fitness; */
   }
   /* Show statistics of caching effectiveness */
-  PRINT("FEVS %u  -%u\n", fevs, i-fevs);
+  printf("FEVS %u  -%u\n", fevs, i-fevs);
 
   /* Scale fitnesses to range 0.5-1.0 */
   offset = 0-min;	     /* Shift range for lower bound at zero */
@@ -320,7 +318,7 @@ int GA_checkfitness(GA_session *session) {
   scaleidx = 5;
   if ( session->generation <= scaleidx )
     scalelen += (1-scalelen)*(scaleidx-session->generation)/scaleidx;
-  /* PRINT("min %10u => %f\nmax %10u => %f\noffset   %f   scale %f\n",0,min,0,max,offset,scale); */
+  /* printf("min %10u => %f\nmax %10u => %f\noffset   %f   scale %f\n",0,min,0,max,offset,scale); */
 
   for ( i = 0; i < session->popsize; i++ ) {
     session->population[i].unscaledfitness = session->population[i].fitness;
@@ -332,15 +330,15 @@ int GA_checkfitness(GA_session *session) {
     if ( session->population[i].fitness >
 	 session->population[session->fittest].fitness ) session->fittest = i;
     session->fitnesssum += session->population[i].fitness;
-    PRINT("%-4s %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
-	  (session->fittest == i) ? "FITM" : "ITEM", session->generation, i,
-	  graydecode(session->population[i].segments[0]),
-	  session->population[i].fitness,
-	  session->population[i].unscaledfitness);
+    printf("%-4s %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
+	   (session->fittest == i) ? "FITM" : "ITEM", session->generation, i,
+	   graydecode(session->population[i].segments[0]),
+	   session->population[i].fitness,
+	   session->population[i].unscaledfitness);
     /* Use more lines for additional segments */
     for ( j = 1; j < session->population[i].segmentcount; j++ )
-      PRINT("               GD %03d %10u\n", j,
-	    graydecode(session->population[i].segments[j]));
+      printf("               GD %03d %10u\n", j,
+	     graydecode(session->population[i].segments[j]));
   }
 
   /* Sort the sorted list. */
@@ -357,22 +355,23 @@ int GA_checkfitness(GA_session *session) {
 		    &(session->population[session->fittest  ].segments[0]),
 		    sizeof(GA_segment)*session->population[session->fittest].segmentcount);
     if ( mc ) {
-      PRINT("Sort failed: S=%u vs F=%u\n",
-	    session->sorted[0], session->fittest);
+      qprintf(session->settings, "Sort failed: S=%u vs F=%u\n",
+	      session->sorted[0], session->fittest);
       return 2;
     }
   }
   /* Display the best individual */
-  PRINT("BEST %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
-	session->generation, session->fittest,
-	graydecode(session->population[session->fittest].segments[0]),
-	session->population[session->fittest].fitness,
-	session->population[session->fittest].unscaledfitness);
+  qprintf(session->settings,
+	  "BEST %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
+	  session->generation, session->fittest,
+	  graydecode(session->population[session->fittest].segments[0]),
+	  session->population[session->fittest].fitness,
+	  session->population[session->fittest].unscaledfitness);
   /* Use more lines for additional segments */
   for ( j = 1; j < session->population[session->fittest].segmentcount; j++ )
-    PRINT("               GD %03d %10u\n", j,
-	  graydecode(session->population[session->fittest].segments[j]));
-  PRINT("\n");
+    qprintf(session->settings, "               GD %03d %10u\n", j,
+	    graydecode(session->population[session->fittest].segments[j]));
+  printf("\n");
   return 0;
 }
 
@@ -449,6 +448,9 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
    case 's':
      settings->randomseed = atoi(optarg);
      break;
+   case 'D':
+     settings->debugmode = 1;
+     break;
    case 'h':
    case '?':
      /* getopt_long already printed an error message. */
@@ -506,13 +508,19 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
      * computers, even when using the same seed.
      */
     {"seed", required_argument, NULL, 's'},
+    /** -D, --debug
+     *
+     * If specified, write all log messages to stdout INSTEAD of
+     * FILE.log (see --output). Only applicable to ga-spectroscopy.
+     */
+    {"debug",          no_argument, 0, 'D'},
     /*
       {"verbose", no_argument,       &verbose_flag, 1},
       {"brief",   no_argument,       &verbose_flag, 0},
     */
     {0, 0, 0, 0}
   };
-  static const char *global_optstring = "c:g:p:s:h";
+  static const char *global_optstring = "c:g:p:s:hD";
   int c;
   struct option *long_options;
   struct option config_options[2] = {global_long_options[0],{0,0,0,0}};
@@ -615,3 +623,13 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
   return 0;
 }
 
+int qprintf(GA_settings *settings, const char *format, ...) {
+  va_list ap;
+  int rc = 0;
+  va_start(ap, format);
+  rc = vprintf(format, ap);
+  if ( !settings->debugmode ) 
+    rc = vfprintf(settings->stdoutfh, format, ap);
+  va_end(ap);
+  return rc;
+}
