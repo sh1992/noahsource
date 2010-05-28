@@ -5,6 +5,9 @@
 #ifndef _HAVE_GA_H
 #include <stdint.h>
 #include <getopt.h>
+#if THREADS
+#include <pthread.h>
+#endif
 
 /* Library typedefs */
 
@@ -47,10 +50,28 @@ typedef struct GA_settings_struct {
   int debugmode;
   /** Real stdout if debug mode is not active. \see debugmode */
   FILE *stdoutfh;
+  /** Number of threads to use. */
+  int threadcount;
   /** Pointer to problem-specific options structure (for use in
    * options parsing and fitness evaluation). */
   void *ref;
 } GA_settings;
+
+/** The state of the current thread.
+ */
+typedef struct GA_thread_struct {
+  /** Pointer to the GA_session object. */
+  struct GA_session_struct *session;
+#if THREADS
+  /** pthread object. */
+  pthread_t threadid;
+#endif
+  /** Numeric identifier for this thread within the program. */
+  int number;
+  /** Pointer to problem-specific thread state structure (for example,
+   * to hold persistant allocated structures) */
+  void *ref;
+} GA_thread;
 
 /** The state of the entire session.
  */
@@ -82,6 +103,33 @@ typedef struct GA_session_struct {
   unsigned int cachesize;
   /** Pointer to the GA_settings structure for this session. */
   GA_settings *settings;
+
+  /** Array of GA_thread structures, representing each thread. */
+  GA_thread *threads;
+#if THREADS
+  /** Mutex to control access to worker thread from main thread. */
+  pthread_mutex_t inmutex;
+  /** Conditional variable to signal worker thread of new input data. */
+  pthread_cond_t incond;
+  /** Index of population element to evaluate. */
+  int inindex;
+  /** Flag to indicate availability of new input data. */
+  int inflag;
+
+  /** Mutex to control access to main thread from worker thread. */
+  pthread_mutex_t outmutex;
+  /** Conditional variable to signal main thread of new output data. */
+  pthread_cond_t outcond;
+  /** Index of population element that was evaluated. */
+  int outindex;
+  /** Return value of GA_do_checkfitness. */
+  int outretval;
+  /** Flag to indicate availability of new output data. */
+  int outflag;
+
+  /** Mutex to control access to fitness cache. */
+  pthread_mutex_t cachemutex;
+#endif
 } GA_session;
 
 /* Library functions */
@@ -106,7 +154,9 @@ int GA_defaultsettings(GA_settings *settings);
  *     compile-time definition of GA_segment.
  *
  * \returns 0 to indicate success, 1 through 7 if a memory allocation
- * failed, 16 if any fitness function failed.
+ * failed, 20 if an invalid thread count is specified, 21 if an error
+ * occurs starting a thread, 25 if the thread_init function fails, 30
+ * if any fitness function failed.
  */
 int GA_init(GA_session *session, GA_settings *settings,
 	    unsigned int segmentcount);
@@ -170,14 +220,30 @@ int GA_checkfitness(GA_session *session);
  *
  * \returns 0 for success, nonzero for failure.
  */
-extern int GA_fitness(const GA_session *ga, GA_individual *elem);
+extern int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem);
 
 /** Check if a termination condition has been reached.
  *
  * \returns 0 if the evolution should continue, nonzero if the
  *          evolution should terminate.
  */
-extern int GA_termination(const GA_session *session);
+extern int GA_termination(const GA_session *ga);
+
+/** Initialize problem-specific thread state.
+ *
+ * \param thread The GA_thread object for the thread.
+ *
+ * \returns 0 for success, nonzero for failure.
+ */
+extern int GA_thread_init(GA_thread *thread);
+
+/** Free problem-specific thread state.
+ *
+ * \param thread The GA_thread object for the thread.
+ *
+ * \returns 0 for success.
+ */
+extern int GA_thread_free(GA_thread *thread);
 
 /* \} */
 
@@ -237,6 +303,7 @@ typedef int (*GA_my_parseopt_t)(const struct option *long_options,
  * \param my_long_options getopt options list for problem-specific options.
  * \param my_parse_option Option parsing function for problem-specific options.
  * \param my_usage        Usage message for problem-specific options.
+ * \param optlog          Reallocable string to log options into, or NULL.
  *
  * \see <a href="http://linux.die.net/man/3/getopt">getopt(3)</a>,
  *     GA_my_parseopt_t, GA_run_getopt
@@ -245,16 +312,32 @@ typedef int (*GA_my_parseopt_t)(const struct option *long_options,
  */
 int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 	      const char *my_optstring, const struct option *my_long_options,
-	      GA_my_parseopt_t my_parse_option, char *my_usage);
+	      GA_my_parseopt_t my_parse_option, char *my_usage,
+	      char **optlog);
 /* \} */
 
 /** Print a message both to the stdout and (unless in debug mode) the
- * "real" stdout saved in GA_settings.stdoutfd.
+ * "real" stdout saved in GA_settings.stdoutfd. Thread-safe in
+ * conjunction with tprintf and invisible_system.
  *
- * \see Ga_settings.debugmode
+ * \see Ga_settings.debugmode, tprintf, invisible_system
  */
 int qprintf(GA_settings *settings, const char *format, ...);
 
+/** Thread-safe regular printf. Thread-safe in conjunction with
+ * qprintf and invisible_system.
+ *
+ * \see qprintf, invisible_system
+ */
+int tprintf(const char *format, ...);
 
+/** Spawn a process and return its exit status. Redirect the child
+ * process's STDOUT to the file descriptor denoted by stdoutfd.
+ * Thread-safe in conjunction with qprintf and tprintf.
+ *
+ * \see <a href="http://linux.die.net/man/3/system">system(3)</a>,
+ *      qprintf, tprintf
+ */
+int invisible_system(int stdoutfd, int argc, ...);
 #define _HAVE_GA_H
 #endif

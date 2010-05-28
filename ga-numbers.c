@@ -39,7 +39,8 @@ int main(int argc, char *argv[]) {
   settings.popsize = POPULATION;
   settings.generations = GENERATIONS;
   settings.ref = &target;
-  GA_getopt(argc,argv, &settings, "n:", my_long_options, my_parseopt, "");
+  GA_getopt(argc,argv, &settings, "n:", my_long_options, my_parseopt, "",
+	    NULL);
 
   if ( (rc = GA_init(&ga, &settings, 1)) != 0 ) {
     printf("GA_init failed: %d\n", rc);
@@ -64,7 +65,7 @@ int main(int argc, char *argv[]) {
   return rc;
 }
 
-int GA_fitness(const GA_session *ga, GA_individual *elem) {
+int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   GA_segment x = graydecode(elem->segments[0]);
   /* printf("%u\n",elem->segments[0]); */
   elem->fitness = -log(1+fabs(*(int *)(ga->settings->ref)-(double)x*x));
@@ -72,9 +73,16 @@ int GA_fitness(const GA_session *ga, GA_individual *elem) {
   return 0;
 }
 
-int GA_termination(const GA_session *session) {
-  if ( session->population[session->fittest].unscaledfitness > -0.00001 )
+int GA_termination(const GA_session *ga) {
+  if ( ga->population[ga->fittest].unscaledfitness > -0.00001 )
     return 1;
   return 0;
 }
 
+int GA_thread_init(GA_thread *thread) {
+  return 0;
+}
+
+int GA_thread_free(GA_thread *thread) {
+  return 0;
+}

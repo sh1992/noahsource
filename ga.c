@@ -7,8 +7,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
+#include <signal.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include <sys/types.h>
 #include "ga.h"
 #include "ga.usage.h"
+
+#if THREADS
+static void *GA_do_thread (void * arg);
+/* Consider abandoning this mutex in favor of flockfile on */
+static pthread_mutex_t iomutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 int GA_defaultsettings(GA_settings *settings) {
     memset(settings, 0, sizeof(GA_settings));
@@ -17,6 +28,11 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->popsize = 64;
     settings->generations = 100;
     settings->ref = NULL;
+#ifdef THREADS
+    settings->threadcount = 2;
+#else
+    settings->threadcount = 1;
+#endif
     /* Default debugmode to true, since the infrastructure to renumber
      * file descriptors is not implemented in this library */
     settings->debugmode = 1;
@@ -26,7 +42,7 @@ int GA_defaultsettings(GA_settings *settings) {
 
 int GA_init(GA_session *session, GA_settings *settings,
 	    unsigned int segmentcount) {
-  unsigned int i, j;
+  unsigned int i, j, rc;
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
 
   /* Seed the PRNG */
@@ -73,14 +89,58 @@ int GA_init(GA_session *session, GA_settings *settings,
     if ( !session->fitnesscache[i] ) return 7;
     memset(session->fitnesscache[i], 0, sizeof(GA_individual)*2);
   }
+  /* Initialize thread pool */
+  if ( settings->threadcount < 1 ) return 20;
+#if THREADS
+  session->inflag = 0;
+  session->outflag = 0;
+
+  /* Initialize mutexes */
+  rc = pthread_mutex_init(&(session->inmutex), NULL);
+  if ( rc ) { qprintf(session->settings,
+		      "GA_init: mutex_init(in): %d\n", rc); exit(1); }
+  rc = pthread_mutex_init(&(session->outmutex), NULL);
+  if ( rc ) { qprintf(session->settings,
+		      "GA_init: mutex_init(out): %d\n", rc); exit(1); }
+  rc = pthread_cond_init(&(session->incond), NULL);
+  if ( rc ) { qprintf(session->settings,
+		      "GA_init: cond_init(in): %d\n", rc); exit(1); }
+  rc = pthread_cond_init(&(session->outcond), NULL);
+  if ( rc ) { qprintf(session->settings,
+		      "GA_init: cond_init(out): %d\n", rc); exit(1); }
+  rc = pthread_mutex_init(&(session->cachemutex), NULL);
+  if ( rc ) { qprintf(session->settings,
+		      "GA_init: mutex_init(cache): %d\n", rc); exit(1); }
+#else
+  /* No threads supported */
+  if ( settings->threadcount > 1 ) return 20; rc = 0;
+#endif
+  session->threads = malloc(sizeof(GA_thread)*settings->threadcount);
+  if ( !session->threads ) return 21;
+  for ( i = 0; i < session->settings->threadcount; i++ ) {
+    int rc = 0;
+    session->threads[i].session = session;
+    session->threads[i].number = i+1;
+#if THREADS
+    if ( pthread_create (&session->threads[i].threadid, NULL,
+			 GA_do_thread, (void *)&(session->threads[i])) != 0 ) {
+      return 21;
+    }
+#endif
+    rc = GA_thread_init(&session->threads[i]);
+    if ( rc != 0 ) return 25;
+  }
   /* Evaluate final fitness for each individual */
-  if ( GA_checkfitness(session) != 0 ) return 16;
+  if ( GA_checkfitness(session) != 0 ) return 30;
   /* Return success */
   return 0;
 }
 
 int GA_cleanup(GA_session *session) {
   unsigned int i;
+  for ( i = 0; i < session->settings->threadcount; i++ ) {
+    GA_thread_free(&session->threads[i]);
+  }
   for ( i = 0; i < session->popsize; i++ ) {
     free(session->population[i].segments);
     free(session->newpop[i].segments);
@@ -213,6 +273,179 @@ int GA_comparator(const void *a, const void *b) {
   else return 0; /* x-y; */	/* If equal sort by index to preserve order */
 }
 
+static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
+  GA_session *session = thread->session;
+  int j;
+  int found = 0;
+  GA_segment hashtemp = 0;
+  unsigned int hashbucket = 0;
+
+  /* Hash the individual to determine caching location */
+  for ( j = 0; j < session->population[i].segmentcount; j++ )
+    hashtemp ^= session->population[i].segments[j];
+  hashbucket = hashtemp % session->cachesize;
+
+  /* Check in the cache for an earlier computation of the fitness value */
+#if THREADS
+  /* LOCK fitnesscache */
+  j = pthread_mutex_lock(&(session->cachemutex));
+  if ( j ) { qprintf(session->settings,
+		     "GA_dcf: mutex_lock(cache_r): %d\n", j); exit(1); }
+#endif
+  for ( j = 0; j < 2; j++ ) {
+    if ( ( session->fitnesscache[hashbucket][j].unscaledfitness != 0 ) &&
+	 !memcmp(session->population[i].segments,
+		 session->fitnesscache[hashbucket][j].segments,
+		 sizeof(GA_segment)*session->population[i].segmentcount) ) {
+      session->population[i].fitness =
+	session->fitnesscache[hashbucket][j].fitness;
+      found = 1 + j;
+      break;
+    }
+  }
+#if THREADS
+  /* UNLOCK fitnesscache */
+  j = pthread_mutex_unlock(&(session->cachemutex));
+  if ( j ) { qprintf(session->settings,
+		     "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
+#endif
+
+#if !THREADS
+  /* Also check the earlier entries in the new population. Not
+   * threadsafe. */
+  if ( !found ) {
+    for ( j = 0; j < i; j++ ) {
+      if ( !memcmp(session->population[i].segments,
+		   session->population[j].segments,
+		   sizeof(GA_segment)*session->population[i].segmentcount)) {
+	session->population[i].fitness = session->population[j].fitness;
+	found = 5;
+	break;
+      }
+    }
+  }
+#endif
+
+  /* Also check the old population (ironically stored in newpop).  No
+   * lock necessary, newpop only modified in GA_evolve */
+  if ( !found && session->generation > 0 ) {
+    for ( j = 0; j < session->popsize; j++ ) {
+      if ( !memcmp(session->population[i].segments,
+		   session->newpop[j].segments,
+		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
+	session->population[i].fitness = session->newpop[j].unscaledfitness;
+	found = 6;
+	break;
+      }
+    }
+  }
+
+  /* If not found in the cache, compute the fitness value */
+  if ( !found ) {
+    int rc = 0;
+    if ( ((rc = GA_fitness(session, thread->ref, /* FIXME */
+			   &session->population[i])) != 0)
+	 || isnan(session->population[i].fitness) ) {
+      qprintf(session->settings, "fitness error %u %f => %d\n",
+	      session->population[i].segments[0],
+	      session->population[i].fitness, rc);
+      return 51;
+    }
+  }
+
+  /* Announce caching status for segment use */ 
+  tprintf("FND%1d hash %08x bucket %3d orig %f\n",
+	  found, hashtemp, hashbucket, session->population[i].fitness);
+  /* Save the fitness in the cache */
+  if ( ( found == 0 ) || ( found > 1 ) ) {
+#if THREADS
+    /* LOCK fitnesscache */
+    j = pthread_mutex_lock(&(session->cachemutex));
+    if ( j ) { qprintf(session->settings,
+		       "GA_dcf: mutex_lock(cache_w): %d\n", j); exit(1); }
+#endif
+    if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 )
+      /* First demote the first-level hash to second-level */
+      memcpy(&(session->fitnesscache[hashbucket][1]),
+	     &(session->fitnesscache[hashbucket][0]), sizeof(GA_individual));
+    memcpy(&(session->fitnesscache[hashbucket][0]),
+	   &(session->population[i]), sizeof(GA_individual));
+    session->fitnesscache[hashbucket][0].unscaledfitness = 1;
+#if THREADS
+    /* UNLOCK fitnesscache */
+    j = pthread_mutex_unlock(&(session->cachemutex));
+    if ( j ) { qprintf(session->settings,
+		       "GA_dcf: mutex_unlock(cache_w): %d\n", j); exit(1); }
+#endif
+  }
+  return found;
+}
+
+#if THREADS
+static void *GA_do_thread (void * arg) {
+  GA_thread *thread = (GA_thread *)arg;
+  GA_session *session = thread->session;
+  while ( 1 ) {
+    int in, found;
+    int rc;
+
+    /* Find a job to process */
+    /* printf("Waiting for mutex...\n"); */
+    rc = pthread_mutex_lock(&(session->inmutex));
+    if ( rc ) { qprintf(session->settings,
+			"GA_do_thread: mutex_lock(in): %d\n", rc); exit(1); }
+    /* Wait until the job-available flag is set */
+    while ( !(session->inflag) ) {
+      /* printf("Waiting for cond...\n"); */
+      rc = pthread_cond_wait(&(session->incond), &(session->inmutex));
+      if ( rc ) { qprintf(session->settings,
+			  "GA_do_thread: cond_wait(in): %d\n", rc); exit(1); }
+    }
+    in = session->inindex;	/* We got data to process! */
+
+    /* Is there another job to dispatch? */
+    session->inindex++;
+    if ( session->inindex < session->popsize ) {
+      rc = pthread_cond_signal(&(session->incond));
+      if ( rc )
+	{ qprintf(session->settings,
+		  "GA_do_thread: cond_signal(in): %d\n", rc); exit(1); }
+    }
+    else session->inflag = 0;	/* No more input data */
+    rc = pthread_mutex_unlock(&(session->inmutex));
+    if ( rc ) { qprintf(session->settings,
+			"GA_do_thread: mutex_unlock(in): %d\n", rc); exit(1); }
+
+    /* Process item */
+    found = GA_do_checkfitness(thread, in);
+
+    /* Return the result to main program */
+    rc = pthread_mutex_lock(&(session->outmutex));
+    if ( rc ) { qprintf(session->settings,
+			"GA_do_thread: mutex_lock(out): %d\n", rc); exit(1); }
+    while ( session->outflag ) {
+      /* printf("Waiting for output queue to empty...\n"); */
+      rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
+      if ( rc ) { qprintf(session->settings,
+			  "GA_do_thread: cond_wait(out): %d\n", rc); exit(1); }
+      /* printf("Retrying output\n"); */
+    }
+    session->outindex  = in;
+    session->outretval = found;
+    session->outflag = 1;
+    rc = pthread_cond_broadcast(&(session->outcond));
+    if ( rc ) { qprintf(session->settings,
+			"GA_do_thread: cond_bcast(out): %d\n", rc); exit(1); }
+    rc = pthread_mutex_unlock(&(session->outmutex));
+    if ( rc )
+      { qprintf(session->settings,
+		"GA_do_thread: mutex_unlock(out): %d\n", rc); exit(1); }
+    /* printf("Output completed\n"); */
+  }
+  return NULL;
+}
+#endif
+
 int GA_checkfitness(GA_session *session) {
   unsigned int i, j;
   int rc;
@@ -223,88 +456,84 @@ int GA_checkfitness(GA_session *session) {
   session->fittest = 0;
   session->fitnesssum = 0;
   /* Evaluate fitness for each individual */
+#if 0
   for ( i = 0; i < session->popsize; i++ ) {
-    int found = 0;
-    GA_segment hashtemp = 0;
-    unsigned int hashbucket = 0;
-
-    /* Hash the individual to determine caching location */
-    for ( j = 0; j < session->population[i].segmentcount; j++ )
-      hashtemp ^= session->population[i].segments[j];
-    hashbucket = hashtemp % session->cachesize;
-
-    /* Check in the cache for an earlier computation of the fitness value */
-    for ( j = 0; j < 2; j++ ) {
-      if ( ( session->fitnesscache[hashbucket][j].unscaledfitness != 0 ) &&
-	   !memcmp(session->population[i].segments,
-		   session->fitnesscache[hashbucket][j].segments,
-		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
-	session->population[i].fitness =
-	  session->fitnesscache[hashbucket][j].fitness;
-	found = 1 + j;
-	break;
-      }
-    }
-
-    /* Also check the earlier entries in the new population */
-    if ( !found ) {
-      for ( j = 0; j < i; j++ ) {
-	if ( !memcmp(session->population[i].segments,
-		     session->population[j].segments,
-		     sizeof(GA_segment)*session->population[i].segmentcount)) {
-	  session->population[i].fitness = session->population[j].fitness;
-	  found = 5;
-	  break;
-	}
-      }
-    }
-
-    /* Also check the old population (ironically stored in newpop) */
-    if ( !found && session->generation > 0 ) {
-      for ( j = 0; j < session->popsize; j++ ) {
-	if ( !memcmp(session->population[i].segments,
-		     session->newpop[j].segments,
-		     sizeof(GA_segment)*session->population[i].segmentcount) ) {
-	  session->population[i].fitness = session->newpop[j].unscaledfitness;
-	  found = 6;
-	  break;
-	}
-      }
-    }
-
-    /* If not found in the cache, compute the fitness value */
-    if ( !found ) {
-      fevs++;
-      if ( ((rc = GA_fitness(session, &session->population[i])) != 0)
-	   || isnan(session->population[i].fitness) ) {
-	qprintf(session->settings, "fitness error %u %f => %d\n",
-		session->population[i].segments[0],
-		session->population[i].fitness, rc);
-	return 1;
-      }
-    }
-
-    /* Announce caching status for segment use */ 
-    printf("FND%1d hash %08x bucket %3d orig %f\n",
-	   found, hashtemp, hashbucket, session->population[i].fitness);
-    /* Save the fitness in the cache */
-    if ( ( found == 0 ) || ( found > 1 ) ) {
-      if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 )
-	/* First demote the first-level hash to second-level */
-	memcpy(&(session->fitnesscache[hashbucket][1]),
-	       &(session->fitnesscache[hashbucket][0]), sizeof(GA_individual));
-      memcpy(&(session->fitnesscache[hashbucket][0]),
-	     &(session->population[i]), sizeof(GA_individual));
-      session->fitnesscache[hashbucket][0].unscaledfitness = 1;
-    }
-
+    int found = GA_do_checkfitness(session->threads[0], i);
+    if ( found > 50 ) return found; /* Error */
+    if ( !found ) fevs++;	    /* Had to do fitness evaluation */
     /* Track minimum and maximum fitnesses */
     if ( i == 0 || session->population[i].fitness < min )
       min = session->population[i].fitness;
     if ( i == 0 || session->population[i].fitness > max )
       max = session->population[i].fitness;
-    /* session->fitnesssum += session->population[i].fitness; */
   }
+#else
+#if THREADS
+  /* Initiate dispatch among worker threads */
+  rc = pthread_mutex_lock(&(session->inmutex));
+  if ( rc ) { qprintf(session->settings,
+		      "GA_checkfitness: mutex_lock(in): %d\n", rc); exit(1); }
+  session->inindex = 0;
+  session->inflag = 1;
+  rc = pthread_mutex_unlock(&(session->inmutex));
+  if ( rc )
+    { qprintf(session->settings,
+	      "GA_checkfitness: mutex_unlock(in): %d\n", rc); exit(1); }
+  rc = pthread_cond_signal(&(session->incond));
+  if ( rc ) { qprintf(session->settings,
+		      "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
+#endif
+  j = 0; i = 0;
+  while ( j < session->popsize ) {
+    int found;
+#if THREADS
+    /* Check the worker thread output buffer. */
+    rc = pthread_mutex_lock(&(session->outmutex));
+    if ( rc )
+      { qprintf(session->settings,
+		"GA_checkfitness: mutex_lock(out): %d\n", rc); exit(1); }
+    /* Wait until the job-completed flag is set. */
+    while ( !session->outflag ) {
+      /* printf("Waiting for reply...\n"); */
+      rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
+      if ( rc )
+	{ qprintf(session->settings,
+		  "GA_checkfitness: cond_wait(out): %d\n", rc); exit(1); }
+      /* printf("Waking up\n"); */
+    }
+    /* printf("outflag! \n"); */
+    i = session->outindex;
+    found = session->outretval;
+    session->outflag = 0;
+    /* Unlock output buffer */
+    rc = pthread_mutex_unlock(&(session->outmutex));
+    if ( rc )
+      { qprintf(session->settings,
+		"GA_checkfitness: mutex_unlock(out): %d\n", rc); exit(1); }
+    rc = pthread_cond_broadcast(&(session->outcond));
+    if ( rc )
+      { qprintf(session->settings,
+		"GA_checkfitness: cond_broadcast(out): %d\n", rc); exit(1); }
+#else
+    /* Non-threaded: Just do this fitness evaluation */
+    i = j; rc = 0;
+    found = GA_do_checkfitness(&(session->threads[0]), i);
+#endif
+
+    if ( found > 50 ) return found; /* Error */
+    if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
+
+    printf("Got %d %d.\n", j, i);
+
+    /* Track minimum and maximum fitnesses */
+    /* session->fitnesssum += session->population[i].fitness; */
+    if ( j == 0 || session->population[i].fitness < min )
+      min = session->population[i].fitness;
+    if ( j == 0 || session->population[i].fitness > max )
+      max = session->population[i].fitness;
+    j++;
+  }
+#endif	/* unless 0 */
   /* Show statistics of caching effectiveness */
   printf("FEVS %u  -%u\n", fevs, i-fevs);
 
@@ -394,6 +623,63 @@ unsigned int urandom() {
   return out;
 }
 
+/** Append second string into first. Repeated appends to the same
+ * string are cached, making this an O(n) function, where n =
+ * strlen(append).
+ *
+ * From public domain file src/usr.bin/sdiff/sdiff.c in
+ * ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-current/tar_files/src/usr.bin.tar.gz
+ */
+static int astrcat(char **s, const char *append) {
+  /* Length of string in previous run. */
+  static size_t offset = 0;
+  size_t newsiz;
+  /* String from previous run.  Compared to *s to see if we are
+   * dealing with the same string.  If so, we can use offset. */
+  static const char *oldstr = NULL;
+  char *newstr;
+
+  /* First string is NULL, so just copy append. */
+  if (!*s) {
+    if (!(*s = strdup(append))) return 1;
+
+    /* Keep track of string. */
+    offset = strlen(*s);
+    oldstr = *s;
+
+    return 0;
+  }
+
+  /* *s is a string so concatenate. */
+  
+  /* Did we process the same string in the last run? If this is a
+   * different string from the one we just processed cache new
+   * string. */
+  if (oldstr != *s) {
+    offset = strlen(*s);
+    oldstr = *s;
+  }
+  
+  /* Size = strlen(*s) + \n + strlen(append) + '\0'. */
+  newsiz = offset + 1 + strlen(append) + 1;
+  
+  /* Resize *s to fit new string. */
+  newstr = realloc(*s, newsiz);
+  if (newstr == NULL) return 2;
+  *s = newstr;
+  
+  /* *s + offset should be end of string. */
+  /* Concatenate. */
+  strncpy(*s + offset, "\n", newsiz - offset);
+  strncat(*s + offset, append, newsiz - offset);
+  
+  /* New string length should be exactly newsiz - 1 characters. */
+  /* Store generated string's values. */
+  offset = newsiz - 1;
+  oldstr = *s;
+  return 0;
+}
+
 /** Helper function for GA_getopt.
  *
  * \param argc,argv       Command-line arguments, from main.
@@ -411,13 +697,34 @@ unsigned int urandom() {
 int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
 		  const char *optstring, const struct option *long_options,
 		  int global_count, GA_my_parseopt_t my_parse_option,
-		  char *my_usage) {
+		  char *my_usage, char **optlog, char optlogtype) {
   int c;
   while (1) {
    /* getopt_long stores the option index here. */
    int option_index = 0;
 
    c = getopt_long(argc,argv, optstring, long_options, &option_index);
+
+   /* Record to optlog */
+   if ( optlog && *optlog ) {
+     char *msg = NULL;
+     int rc = 0;
+     if ( c == 0 )
+       rc = asprintf(&msg, "CFG%c %s %s", optlogtype,
+		     long_options[option_index].name, optarg ? optarg : "");
+     else {
+       int i = 0;
+       for ( i = 0; long_options[i].name; i++ ) {
+	 if ( long_options[i].flag == NULL && long_options[i].val == c ) {
+	   rc = asprintf(&msg, "CFG%c %s %s", optlogtype,
+			 long_options[i].name, optarg ? optarg : "");
+	   break;
+	 }
+       }
+     }
+     if ( msg && rc > 0 ) astrcat(optlog, msg);
+   }
+     
 
    /* Detect the end of the options. */
    if (c == -1)
@@ -446,10 +753,13 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
      settings->popsize = atoi(optarg);
      break;
    case 's':
-     settings->randomseed = atoi(optarg);
+     settings->randomseed = strtoul(optarg, NULL, 10);
      break;
    case 'D':
      settings->debugmode = 1;
+     break;
+   case 'T':
+     settings->threadcount = atoi(optarg);
      break;
    case 'h':
    case '?':
@@ -472,7 +782,8 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
 
 int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 	      const char *my_optstring, const struct option *my_long_options,
-	      GA_my_parseopt_t my_parse_option, char *my_usage) {
+	      GA_my_parseopt_t my_parse_option, char *my_usage,
+	      char **optlog) {
   /* After updating usage comments, run generate-usage.pl on this file
    * to update usage message header files.
    */
@@ -514,13 +825,19 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
      * FILE.log (see --output). Only applicable to ga-spectroscopy.
      */
     {"debug",          no_argument, 0, 'D'},
+    /** -T, --threads NUMBER
+     *
+     * Specify the number of fitness evalutions to perform at once. If
+     * threading is not available, must specify 1.
+     */
+    {"threads",   required_argument, 0, 'T'},
     /*
       {"verbose", no_argument,       &verbose_flag, 1},
       {"brief",   no_argument,       &verbose_flag, 0},
     */
     {0, 0, 0, 0}
   };
-  static const char *global_optstring = "c:g:p:s:hD";
+  static const char *global_optstring = "c:g:p:s:hDT:";
   int c;
   struct option *long_options;
   struct option config_options[2] = {global_long_options[0],{0,0,0,0}};
@@ -608,7 +925,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
       if ( rc >= 2 ) fake_argv[2] = value;
       optind = 1;
       GA_run_getopt(rc+1, fake_argv, settings, optstring, long_options,
-		    global_count, my_parse_option, my_usage);
+		    global_count, my_parse_option, my_usage, optlog, 'F');
       free(fake_argv[1]);
       free(key);
       free(value);
@@ -618,7 +935,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 
   optind = 1;
   GA_run_getopt(argc, argv, settings, optstring, long_options,
-		global_count, my_parse_option, my_usage);
+		global_count, my_parse_option, my_usage, optlog, 'A');
   free(long_options);
   return 0;
 }
@@ -627,9 +944,132 @@ int qprintf(GA_settings *settings, const char *format, ...) {
   va_list ap;
   int rc = 0;
   va_start(ap, format);
+#if THREADS
+  { /* LOCK io */
+    int trc = pthread_mutex_lock(&iomutex);
+    if ( trc ) { printf("qprintf: mutex_lock(io): %d\n", trc); exit(1); }
+  }
+  flockfile(stdout);
+  /* flockfile(settings->stdoutfh); */
+#endif
   rc = vprintf(format, ap);
   if ( !settings->debugmode ) 
     rc = vfprintf(settings->stdoutfh, format, ap);
+#if THREADS
+  /* funlockfile(settings->stdoutfh); */
+  funlockfile(stdout);
+  { /* UNLOCK io */
+    int trc = pthread_mutex_unlock(&iomutex);
+    if ( trc ) { printf("qprintf: mutex_unlock(io): %d\n", trc); exit(1); }
+  }
+#endif
   va_end(ap);
   return rc;
+}
+
+int tprintf(const char *format, ...) {
+  va_list ap;
+  int rc = 0;
+  va_start(ap, format);
+#if THREADS
+  { /* LOCK io */
+    int trc = pthread_mutex_lock(&iomutex);
+    if ( trc ) { printf("tprintf: mutex_lock(io): %d\n", trc); exit(1); }
+  }
+  flockfile(stdout);
+#endif
+  rc = vprintf(format, ap);
+#if THREADS
+  funlockfile(stdout);
+  { /* UNLOCK io */
+    int trc = pthread_mutex_unlock(&iomutex);
+    if ( trc ) { printf("tprintf: mutex_unlock(io): %d\n", trc); exit(1); }
+  }
+#endif
+  va_end(ap);
+  return rc;
+}
+
+/** Start a process with STDOUT redirected to the file descriptor
+ * stdoutfd, wait for it to finish, and then return its exit status.
+ * This function based on the sample implementation of system from:
+ * http://www.opengroup.org/onlinepubs/000095399/functions/system.html
+ */
+int invisible_system(int stdoutfd, int argc, ...) {
+  int stat;
+  pid_t pid;
+  /*
+    struct sigaction sa, savintr, savequit;
+    sigset_t saveblock;
+  */
+  va_list ap;
+  char **argv;
+  int i;
+  if ( argc <= 0 ) return 1;
+  argv = malloc(sizeof(char*)*(argc+1));
+  if ( !argv ) return 1;
+  va_start(ap, argc);
+  for ( i = 0; i < argc; i++ ) {
+    argv[i] = va_arg(ap, char *);
+  }
+  argv[argc] = NULL;
+  /*
+  sa.sa_handler = SIG_IGN;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigemptyset(&savintr.sa_mask);
+  sigemptyset(&savequit.sa_mask);
+  sigaction(SIGINT, &sa, &savintr);
+  sigaction(SIGQUIT, &sa, &savequit);
+  sigaddset(&sa.sa_mask, SIGCHLD);
+  sigprocmask(SIG_BLOCK, &sa.sa_mask, &saveblock);
+  */
+
+  /* LOCK io */
+#if THREADS
+  stat = pthread_mutex_lock(&iomutex);
+  if ( stat ) { printf("tprintf: mutex_lock(io): %d\n", stat); exit(1); }
+#endif
+  flockfile(stdout);
+  fflush(NULL);
+  if ((pid = fork()) == 0) {
+    /*
+    sigaction(SIGINT, &savintr, (struct sigaction *)0);
+    sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
+    sigprocmask(SIG_SETMASK, &saveblock, (sigset_t *)0);
+    */
+
+    /* Disable stdout */
+    if ( dup2(stdoutfd, STDOUT_FILENO) == -1 ) _exit(127);
+    funlockfile(stdout);
+
+    execv(argv[0], argv);
+    /* execl("/bin/sh", "sh", "-c", arg, (char *)0); */
+    _exit(127);
+  }
+  /* UNLOCK io */
+  funlockfile(stdout);
+#if THREADS
+  stat = pthread_mutex_unlock(&iomutex);
+  if ( stat ) { printf("tprintf: mutex_unlock(io): %d\n", stat); exit(1); }
+#endif
+  va_end(ap);
+
+  if (pid == -1) {
+    stat = -1; /* errno comes from fork() */
+  } else {
+    while (waitpid(pid, &stat, 0) == -1) {
+      if (errno != EINTR){
+	stat = -1;
+	break;
+      }
+    }
+  }
+  /*
+  sigaction(SIGINT, &savintr, (struct sigaction *)0);
+  sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
+  sigprocmask(SIG_SETMASK, &saveblock, (sigset_t *)0);
+  */
+
+  return(stat);
 }
