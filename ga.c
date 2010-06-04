@@ -15,6 +15,17 @@
 #include "ga.h"
 #include "ga.usage.h"
 
+static int32_t randtbl[32] = {
+  3,
+  -1726662223, 379960547, 1735697613, 1040273694, 1313901226,
+  1627687941, -179304937, -2073333483, 1780058412, -1989503057,
+  -615974602, 344556628, 939512070, -1249116260, 1507946756,
+  -812545463, 154635395, 1388815473, -1926676823, 525320961,
+  -1009028674, 968117788, -123449607, 1284210865, 435012392,
+  -2017506339, -911064859, -370259173, 1132637927, 1398500161,
+  -205601318,
+};
+
 #if THREADS
 static void *GA_do_thread (void * arg);
 /* Consider abandoning this mutex in favor of flockfile on */
@@ -47,7 +58,7 @@ int GA_init(GA_session *session, GA_settings *settings,
 
   /* Seed the PRNG */
   qprintf(settings, "SEED %u\n", settings->randomseed);
-  srandom(settings->randomseed);
+  initstate_r(settings->randomseed, (char *)randtbl, 128, &session->rs);
   /* Zero out the GA_session object and set the fields from the parameters */
   memset(session, 0, sizeof(GA_session));
   session->settings = settings;
@@ -69,8 +80,11 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->population[i].segments = malloc(segmentmallocsize);
     if ( !session->population[i].segments ) return 4;
     /* Generate initial population */
-    for ( j = 0; j < segmentcount; j++ )
-      session->population[i].segments[j] = (GA_segment)random();
+    for ( j = 0; j < segmentcount; j++ ) {
+      int r;
+      if ( random_r(&session->rs, &r) ) perror("random");
+      session->population[i].segments[j] = (GA_segment)r;
+    }
     session->population[i].fitness = 0;
     /* Allocate newpop element */
     memset(&(session->newpop[i]), 0, sizeof(GA_individual));
@@ -88,6 +102,10 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->fitnesscache[i] = malloc(sizeof(GA_individual)*2);
     if ( !session->fitnesscache[i] ) return 7;
     memset(session->fitnesscache[i], 0, sizeof(GA_individual)*2);
+    for ( j = 0; j < 2; j++ ) {
+      session->fitnesscache[i][j].segments = malloc(segmentmallocsize);
+      if ( !session->fitnesscache[i][j].segments ) return 8;
+    }
   }
   /* Initialize thread pool */
   if ( settings->threadcount < 1 ) return 20;
@@ -137,7 +155,11 @@ int GA_init(GA_session *session, GA_settings *settings,
 }
 
 int GA_cleanup(GA_session *session) {
-  unsigned int i;
+  unsigned int i, j;
+  /*
+    if ( random_r(&session->rs, &i) ) perror("random");
+    qprintf(session->settings, "RNDB %u\n", i);
+  */
   for ( i = 0; i < session->settings->threadcount; i++ ) {
     GA_thread_free(&session->threads[i]);
   }
@@ -148,8 +170,10 @@ int GA_cleanup(GA_session *session) {
   free(session->population);
   free(session->newpop);
   free(session->sorted);
-  for ( i = 0; i < session->cachesize; i++ )
+  for ( i = 0; i < session->cachesize; i++ ) {
+    for ( j = 0; j < 2; j++ ) free(session->fitnesscache[i][j].segments);
     free(session->fitnesscache[i]);
+  }
   free(session->fitnesscache);
   return 0;
 }
@@ -177,9 +201,14 @@ int GA_evolve(GA_session *session,
       GA_segment newa, newb;
       unsigned int j;
       for ( j = 0; j < session->newpop[i].segmentcount; j++ ) {
-	int afirst = random()%2;
-	int bitpos = random()%GA_segment_size;
-	GA_segment mask = (1<<bitpos)-1;
+	int afirst;
+	int bitpos;
+	GA_segment mask;
+	if ( random_r(&session->rs, &afirst) ) perror("random");
+	if ( random_r(&session->rs, &bitpos) ) perror("random");
+	afirst = afirst%2;
+	bitpos = bitpos%GA_segment_size;
+	mask = (1<<bitpos)-1;
 	/* Crossover. Random split & recombine. */
 	olda = session->population[afirst ? a : b].segments[j];
 	oldb = session->population[afirst ? b : a].segments[j];
@@ -194,10 +223,13 @@ int GA_evolve(GA_session *session,
 	       olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
 
 	/* Mutation. Low-probability bitflip. */
-	if ( (double)random()/RAND_MAX < 0.5 ) {
-	  afirst = random()%3+1;
+	if ( random_r(&session->rs, &afirst) ) perror("random");
+	if ( (double)afirst/RAND_MAX < 0.5 ) {
+	  if ( random_r(&session->rs, &afirst) ) perror("random");
+	  afirst = afirst%3+1;
 	  /* Consider: Bias towards less significant bits */
-	  bitpos = random()%GA_segment_size;
+	  if ( random_r(&session->rs, &bitpos) ) perror("random");
+	  bitpos = bitpos%GA_segment_size;
 	  mask = 1<<bitpos;
 	  printf("FLP%01x %08x     %08x     ",
 		 afirst, newa, newb);
@@ -233,13 +265,16 @@ int GA_evolve(GA_session *session,
   return 0;
 }
 
-unsigned int GA_roulette(const GA_session *session) {
-  double index = 1.0*random()/RAND_MAX;
+unsigned int GA_roulette(GA_session *session) {
+  double index;
   unsigned int i;
   /* If all the choices have score 0, assign uniform nonzero scores to
    * all individuals. */
   double uniformroulette = 0;
   /* printf("rand %d\n",(int)(index*64)); */
+  int r;
+  if ( random_r(&session->rs, &r) ) perror("random");
+  index = 1.0*r/RAND_MAX;
   if ( session->fitnesssum <= 0 ) uniformroulette = 1.0/session->popsize;
   /* printf("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
   for ( i = 0; i < session->popsize; i++ ) {
@@ -279,6 +314,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   int found = 0;
   GA_segment hashtemp = 0;
   unsigned int hashbucket = 0;
+  /* GA_individual founditem; */
 
   /* Hash the individual to determine caching location */
   for ( j = 0; j < session->population[i].segmentcount; j++ )
@@ -341,6 +377,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   }
 
   /* If not found in the cache, compute the fitness value */
+  /* memcpy(&founditem, &(session->population[i]), sizeof(GA_individual)); */
   if ( !found ) {
     int rc = 0;
     if ( ((rc = GA_fitness(session, thread->ref, /* FIXME */
@@ -352,25 +389,45 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
       return 51;
     }
   }
+  /*
+  if ( found && founditem.fitness != session->population[i].fitness ) {
+    qprintf(session->settings, "cache error %d %08x %08x %08x vs %08x %08x %08x\n  %f != %f\n", i, founditem.segments[0], founditem.segments[1],
+	    founditem.segments[2], session->population[i].segments[0],
+	    session->population[i].segments[1],
+	    session->population[i].segments[2],
+	    founditem.fitness, session->population[i].fitness);
+    return 52;
+  }
+  */
 
   /* Announce caching status for segment use */ 
   tprintf("FND%1d hash %08x bucket %3d orig %f\n",
 	  found, hashtemp, hashbucket, session->population[i].fitness);
   /* Save the fitness in the cache */
   if ( ( found == 0 ) || ( found > 1 ) ) {
+    GA_segment *ptr;
 #if THREADS
     /* LOCK fitnesscache */
     j = pthread_mutex_lock(&(session->cachemutex));
     if ( j ) { qprintf(session->settings,
 		       "GA_dcf: mutex_lock(cache_w): %d\n", j); exit(1); }
 #endif
-    if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 )
+    if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 ) {
       /* First demote the first-level hash to second-level */
+      ptr = session->fitnesscache[hashbucket][1].segments;
       memcpy(&(session->fitnesscache[hashbucket][1]),
 	     &(session->fitnesscache[hashbucket][0]), sizeof(GA_individual));
+      session->fitnesscache[hashbucket][1].segments = ptr;
+      memcpy(ptr, session->fitnesscache[hashbucket][0].segments,
+	     sizeof(GA_segment)*session->population[i].segmentcount);
+    }
+    ptr = session->fitnesscache[hashbucket][0].segments;
     memcpy(&(session->fitnesscache[hashbucket][0]),
 	   &(session->population[i]), sizeof(GA_individual));
     session->fitnesscache[hashbucket][0].unscaledfitness = 1;
+    session->fitnesscache[hashbucket][0].segments = ptr;
+    memcpy(ptr, session->population[i].segments,
+	   sizeof(GA_segment)*session->population[i].segmentcount);
 #if THREADS
     /* UNLOCK fitnesscache */
     j = pthread_mutex_unlock(&(session->cachemutex));
@@ -523,7 +580,7 @@ int GA_checkfitness(GA_session *session) {
     if ( found > 50 ) return found; /* Error */
     if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
 
-    printf("Got %d %d.\n", j, i);
+    printf("Got %d %d.\n", j, i); /* FEVS 64  -4294967295 BUG FIXME */
 
     /* Track minimum and maximum fitnesses */
     /* session->fitnesssum += session->population[i].fitness; */
@@ -697,7 +754,7 @@ static int astrcat(char **s, const char *append) {
 int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
 		  const char *optstring, const struct option *long_options,
 		  int global_count, GA_my_parseopt_t my_parse_option,
-		  char *my_usage, char **optlog, char optlogtype) {
+		  const char *my_usage, char **optlog, char optlogtype) {
   int c;
   while (1) {
    /* getopt_long stores the option index here. */
@@ -782,7 +839,7 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
 
 int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 	      const char *my_optstring, const struct option *my_long_options,
-	      GA_my_parseopt_t my_parse_option, char *my_usage,
+	      GA_my_parseopt_t my_parse_option, const char *my_usage,
 	      char **optlog) {
   /* After updating usage comments, run generate-usage.pl on this file
    * to update usage message header files.
@@ -940,7 +997,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
   return 0;
 }
 
-int qprintf(GA_settings *settings, const char *format, ...) {
+int qprintf(const GA_settings *settings, const char *format, ...) {
   va_list ap;
   int rc = 0;
   va_start(ap, format);

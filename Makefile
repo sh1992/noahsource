@@ -5,8 +5,7 @@
 
 CFLAGS = -Wall -DDEBUG -lm -lpthread -g -D_GNU_SOURCE
 
-ga-spectroscopy: CFLAGS += -DGA_segment=uint32_t -DGA_segment_size=32
-# -DTHREADS
+ga-spectroscopy: CFLAGS += -DGA_segment=uint32_t -DGA_segment_size=32 -DTHREADS
 
 all: ga-numbers ga-spectroscopy
 

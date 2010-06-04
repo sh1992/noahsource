@@ -32,7 +32,9 @@ typedef struct GA_individual_struct {
   unsigned int segmentcount;
   /** The fitness of the individual. \see GA_fitness, GA_checkfitness */
   double fitness;
-  /** The unscaled fitness of the individual. \see GA_checkfitness */
+  /** The unscaled fitness of the individual. In the cache, field is
+   * hijacked to denote validity of the cache entry.  \see
+   * GA_checkfitness */
   double unscaledfitness;
 } GA_individual;
 
@@ -130,6 +132,8 @@ typedef struct GA_session_struct {
   /** Mutex to control access to fitness cache. */
   pthread_mutex_t cachemutex;
 #endif
+  /** Random number generator state variable. */
+  struct random_data rs;
 } GA_session;
 
 /* Library functions */
@@ -187,7 +191,7 @@ int GA_evolve(GA_session *session,
  *
  * \returns An index into the population.
  */
-unsigned int GA_roulette(const GA_session *session);
+unsigned int GA_roulette(GA_session *session);
 
 /** Comparison function for sorting individuals by fitness.
  *
@@ -312,7 +316,7 @@ typedef int (*GA_my_parseopt_t)(const struct option *long_options,
  */
 int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 	      const char *my_optstring, const struct option *my_long_options,
-	      GA_my_parseopt_t my_parse_option, char *my_usage,
+	      GA_my_parseopt_t my_parse_option, const char *my_usage,
 	      char **optlog);
 /* \} */
 
@@ -322,7 +326,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
  *
  * \see Ga_settings.debugmode, tprintf, invisible_system
  */
-int qprintf(GA_settings *settings, const char *format, ...);
+int qprintf(const GA_settings *settings, const char *format, ...);
 
 /** Thread-safe regular printf. Thread-safe in conjunction with
  * qprintf and invisible_system.
