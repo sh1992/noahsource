@@ -134,6 +134,8 @@ typedef struct GA_session_struct {
 #endif
   /** Random number generator state variable. */
   struct random_data rs;
+  /** Random number generator state variable. */
+  int32_t randtbl[32];
 } GA_session;
 
 /* Library functions */

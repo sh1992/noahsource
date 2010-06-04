@@ -56,11 +56,16 @@ int GA_init(GA_session *session, GA_settings *settings,
   unsigned int i, j, rc;
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
 
-  /* Seed the PRNG */
-  qprintf(settings, "SEED %u\n", settings->randomseed);
-  initstate_r(settings->randomseed, (char *)randtbl, 128, &session->rs);
-  /* Zero out the GA_session object and set the fields from the parameters */
+  /* Zero out the GA_session object */
   memset(session, 0, sizeof(GA_session));
+
+  /* Seed the PRNG */
+  memcpy(&session->randtbl, randtbl, sizeof(session->randtbl));
+  qprintf(settings, "SEED %u\n", settings->randomseed);
+  if ( initstate_r(settings->randomseed, (char *)(session->randtbl),
+		   128, &session->rs) ) perror("initstate_r");
+
+  /* Set the fields from the parameters */
   session->settings = settings;
   session->popsize = settings->popsize;
   session->fittest = 0;
