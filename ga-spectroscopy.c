@@ -22,6 +22,8 @@
 #define RANGEMIN 8700		/* Ignore below this frequency */
 #define RANGEMAX 18300		/* Ignore above this frequency */
 
+#define SEGMENTS 3		/* See also fprintf in generate_input_files */
+
 /* char tempdir[16]; */
 
 const char input_suffixes[2][4] = {"var", "int"};
@@ -162,7 +164,7 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
       perror("Failed to open input file");
       return i+1;
     }
-    fprintf(fh, opts->template[i], x[0], x[1], x[2]);
+    fprintf(fh, opts->template[i], x[0], x[1], x[2]); /* FIXME */
     /* Error checking for fprintf? */
     if ( fclose(fh) ) {
       perror("Failed to close input file");
@@ -347,10 +349,34 @@ int main(int argc, char *argv[]) {
   printf("Using %d bins\n", specopts.bins);
 
   /* Run the genetic algorithm */
-  if ( (rc = GA_init(&ga, &settings, 3)) != 0 ) {
+  if ( (rc = GA_init(&ga, &settings, SEGMENTS)) != 0 ) {
     qprintf(&settings, "GA_init failed: %d\n", rc);
     return rc;
   }
+
+#if ENUMERATE	       /* Debugging mode: enumeration of all values */
+  {
+    if ( SEGMENTS != 1 || settings.threadcount != 1 ) {
+      qprintf(&settings, "Settings error\n");
+      exit(1);
+    }
+    GA_individual *x = &(ga.population[0]);
+    int rc;
+    unsigned int i;
+    i = -1;//2082167296;
+    do {
+      i+=10000;
+      x->segments[0] = grayencode(i);
+      rc = GA_fitness(&ga, ga.threads[0].ref, x);
+      if ( rc != 0 ) {
+	qprintf(&settings, "fitness error, %d\n", rc);
+	exit(1);
+      }
+      printf("ENUM %u %f\n", i, x->fitness);
+    } while ( x->segments[0] <= 0xFFFFFFFF); //2107767296 );
+  }
+#else  /* !ENUMERATE */
+
   printf("Starting %d generations\n", settings.generations);
   if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
     qprintf(&settings, "GA_evolve failed: %d\n", rc);
@@ -363,8 +389,8 @@ int main(int argc, char *argv[]) {
 	  starttime, starttime/(settings.generations+1.0));
   /* Save best result */
   {
-    GA_segment x[3];
-    for ( i = 0; i<3; i++ )
+    GA_segment x[SEGMENTS];
+    for ( i = 0; i < SEGMENTS; i++ )
       x[i] = graydecode(ga.population[ga.fittest].segments[i]);
     /* Generate SPCAT input file */
     rc = generate_input_files(&specopts, specopts.basename_out, x);
@@ -374,6 +400,7 @@ int main(int argc, char *argv[]) {
     }
     qprintf(&settings, "Best result saved in %s\n", specopts.basename_out);
   }
+#endif
   /* Cleanup */
   if ( (rc = GA_cleanup(&ga)) != 0 ) {
     qprintf(&settings, "GA_cleanup failed: %d\n", rc);
@@ -392,7 +419,7 @@ int main(int argc, char *argv[]) {
 int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
-  GA_segment x[3];
+  GA_segment x[SEGMENTS];
   int i = 0;
   char filename[128];
   FILE *fh;
@@ -403,7 +430,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   const double binsize = ((double)(RANGEMAX-RANGEMIN))/opts->bins;
   double obsbin[opts->bins], compbin[opts->bins];
   int obsbincount[opts->bins], compbincount[opts->bins];
-  for ( i = 0; i<3; i++ ) x[i] = graydecode(elem->segments[i]);
+  for ( i = 0; i < SEGMENTS; i++ ) x[i] = graydecode(elem->segments[i]);
 
   /* Generate SPCAT input file */
   rc = generate_input_files(opts, thrs->basename_temp, x);

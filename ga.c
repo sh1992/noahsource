@@ -38,6 +38,9 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->randomseed = urandom();
     settings->popsize = 64;
     settings->generations = 100;
+    settings->mutationrate = 0.5;
+    settings->mutationweight = 1;
+    settings->elitism = 8;
     settings->ref = NULL;
 #ifdef THREADS
     settings->threadcount = 2;
@@ -56,29 +59,42 @@ int GA_init(GA_session *session, GA_settings *settings,
   unsigned int i, j, rc;
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
 
+  /* Enforce even numbers by rounding (down) to next even number */
+  if ( settings->elitism % 2 ) {
+    settings->elitism--;
+    qprintf(settings, "Elitism must be even, new value is %u\n",
+	    settings->elitism);
+  }
+  if ( settings->popsize % 2 ) {
+    settings->popsize--;
+    qprintf(settings, "Population size must be even, new value is %u\n",
+	    settings->popsize);
+  }
+
   /* Zero out the GA_session object */
   memset(session, 0, sizeof(GA_session));
 
   /* Seed the PRNG */
   memcpy(&session->randtbl, randtbl, sizeof(session->randtbl));
   qprintf(settings, "SEED %u\n", settings->randomseed);
+  /* Initialize random_r() to be the same as random(). This is how
+   * it's done in my version of libc (eglibc-2.11.1, Ubunu 10.04) */
   if ( initstate_r(settings->randomseed, (char *)(session->randtbl),
 		   128, &session->rs) ) perror("initstate_r");
 
   /* Set the fields from the parameters */
   session->settings = settings;
-  session->popsize = settings->popsize;
   session->fittest = 0;
   /* Allocate the population array (freed in GA_cleanup) */
-  session->population = malloc(sizeof(GA_individual)*session->popsize);
+  session->population = malloc(sizeof(GA_individual)*settings->popsize);
   if ( !session->population ) return 1;
-  session->newpop     = malloc(sizeof(GA_individual)*session->popsize);
+  session->newpop     = malloc(sizeof(GA_individual)*settings->popsize);
   if ( !session->newpop     ) return 2;
   /* Allocate and fill the sorted list (freed in GA_cleanup) */
-  session->sorted     = malloc(sizeof(unsigned int)*session->popsize);
+  session->sorted     = malloc(sizeof(unsigned int)*settings->popsize);
   if ( !session->sorted     ) return 3;
   /* Initialize each individual */
-  for ( i = 0; i < session->popsize; i++ ) {
+  for ( i = 0; i < settings->popsize; i++ ) {
     memset(&(session->population[i]), 0, sizeof(GA_individual));
     session->population[i].segmentcount = segmentcount;
     /* Allocate individual's segments (freed in GA_cleanup) */
@@ -100,7 +116,7 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->sorted[i] = i;
   }
   /* Allocate the fitness cache (freed in GA_cleanup) */
-  session->cachesize = 2*session->popsize;
+  session->cachesize = 2*settings->popsize;
   session->fitnesscache = malloc(sizeof(GA_individual *)*session->cachesize);
   if ( !session->fitnesscache ) return 6;
   for ( i = 0; i < session->cachesize; i++ ) {
@@ -112,8 +128,9 @@ int GA_init(GA_session *session, GA_settings *settings,
       if ( !session->fitnesscache[i][j].segments ) return 8;
     }
   }
-  /* Initialize thread pool */
-  if ( settings->threadcount < 1 ) return 20;
+  /* Check settings for validity */
+  if ( settings->mutationrate < 0 || settings->mutationrate > 1 ) return 31;
+  if ( settings->threadcount < 1 ) return 50;
 #if THREADS
   session->inflag = 0;
   session->outflag = 0;
@@ -136,10 +153,10 @@ int GA_init(GA_session *session, GA_settings *settings,
 		      "GA_init: mutex_init(cache): %d\n", rc); exit(1); }
 #else
   /* No threads supported */
-  if ( settings->threadcount > 1 ) return 20; rc = 0;
+  if ( settings->threadcount > 1 ) return 50; rc = 0;
 #endif
   session->threads = malloc(sizeof(GA_thread)*settings->threadcount);
-  if ( !session->threads ) return 21;
+  if ( !session->threads ) return 51;
   for ( i = 0; i < session->settings->threadcount; i++ ) {
     int rc = 0;
     session->threads[i].session = session;
@@ -147,14 +164,14 @@ int GA_init(GA_session *session, GA_settings *settings,
 #if THREADS
     if ( pthread_create (&session->threads[i].threadid, NULL,
 			 GA_do_thread, (void *)&(session->threads[i])) != 0 ) {
-      return 21;
+      return 51;
     }
 #endif
     rc = GA_thread_init(&session->threads[i]);
-    if ( rc != 0 ) return 25;
+    if ( rc != 0 ) return 55;
   }
   /* Evaluate final fitness for each individual */
-  if ( GA_checkfitness(session) != 0 ) return 30;
+  if ( GA_checkfitness(session) != 0 ) return 90;
   /* Return success */
   return 0;
 }
@@ -168,7 +185,7 @@ int GA_cleanup(GA_session *session) {
   for ( i = 0; i < session->settings->threadcount; i++ ) {
     GA_thread_free(&session->threads[i]);
   }
-  for ( i = 0; i < session->popsize; i++ ) {
+  for ( i = 0; i < session->settings->popsize; i++ ) {
     free(session->population[i].segments);
     free(session->newpop[i].segments);
   }
@@ -190,7 +207,7 @@ int GA_evolve(GA_session *session,
   for ( gen = 0; gen < generations; gen++ ) {
     unsigned int i;
     /* Keep top 8 members of the old population. */
-    for ( i = 0; i < 8; i++ ) {
+    for ( i = 0; i < session->settings->elitism; i++ ) {
       unsigned int j;
       for ( j = 0; j < session->newpop[i].segmentcount; j++ ) {
 	/* Insert new segments */
@@ -199,7 +216,7 @@ int GA_evolve(GA_session *session,
     }
     /* Create a new population by roulette wheel.
        (Consider: Top half roulette wheel/Keep top 8?) */
-    for ( ; i < session->popsize; i+= 2 ) {
+    for ( ; i < session->settings->popsize; i+= 2 ) {
       unsigned int a = GA_roulette(session);
       unsigned int b = GA_roulette(session);
       GA_segment olda, oldb;
@@ -229,12 +246,17 @@ int GA_evolve(GA_session *session,
 
 	/* Mutation. Low-probability bitflip. */
 	if ( random_r(&session->rs, &afirst) ) perror("random");
-	if ( (double)afirst/RAND_MAX < 0.5 ) {
+	if ( (double)afirst/RAND_MAX < session->settings->mutationrate ) {
 	  if ( random_r(&session->rs, &afirst) ) perror("random");
 	  afirst = afirst%3+1;
-	  /* Consider: Bias towards less significant bits */
 	  if ( random_r(&session->rs, &bitpos) ) perror("random");
-	  bitpos = bitpos%GA_segment_size;
+	  /* Weighted mutation: Bias towards less significant bits */
+	  bitpos = GA_segment_size*powf(((double)bitpos/RAND_MAX),
+	                                session->settings->mutationweight);
+          /* Guard against floating point inaccuracies */
+          if ( bitpos < 0 ) bitpos = 0;
+          if ( bitpos > 31 ) bitpos = 31;
+	  /* bitpos = bitpos%GA_segment_size; */
 	  mask = 1<<bitpos;
 	  printf("FLP%01x %08x     %08x     ",
 		 afirst, newa, newb);
@@ -280,9 +302,10 @@ unsigned int GA_roulette(GA_session *session) {
   int r;
   if ( random_r(&session->rs, &r) ) perror("random");
   index = 1.0*r/RAND_MAX;
-  if ( session->fitnesssum <= 0 ) uniformroulette = 1.0/session->popsize;
+  if ( session->fitnesssum <= 0 )
+    uniformroulette = 1.0/session->settings->popsize;
   /* printf("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
-  for ( i = 0; i < session->popsize; i++ ) {
+  for ( i = 0; i < session->settings->popsize; i++ ) {
     double score = (session->fitnesssum <= 0) ? uniformroulette :
       (1.0*session->population[i].fitness/session->fitnesssum);
     if ( index < score ) {
@@ -370,7 +393,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   /* Also check the old population (ironically stored in newpop).  No
    * lock necessary, newpop only modified in GA_evolve */
   if ( !found && session->generation > 0 ) {
-    for ( j = 0; j < session->popsize; j++ ) {
+    for ( j = 0; j < session->settings->popsize; j++ ) {
       if ( !memcmp(session->population[i].segments,
 		   session->newpop[j].segments,
 		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
@@ -467,7 +490,7 @@ static void *GA_do_thread (void * arg) {
 
     /* Is there another job to dispatch? */
     session->inindex++;
-    if ( session->inindex < session->popsize ) {
+    if ( session->inindex < session->settings->popsize ) {
       rc = pthread_cond_signal(&(session->incond));
       if ( rc )
 	{ qprintf(session->settings,
@@ -511,7 +534,7 @@ static void *GA_do_thread (void * arg) {
 int GA_checkfitness(GA_session *session) {
   unsigned int i, j;
   int rc;
-  double min, max;
+  double min, max, avgtmp;
   double offset, scale, scalelen;
   int scaleidx;
   unsigned int fevs = 0;
@@ -546,7 +569,7 @@ int GA_checkfitness(GA_session *session) {
 		      "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
 #endif
   j = 0; i = 0;
-  while ( j < session->popsize ) {
+  while ( j < session->settings->popsize ) {
     int found;
 #if THREADS
     /* Check the worker thread output buffer. */
@@ -585,7 +608,7 @@ int GA_checkfitness(GA_session *session) {
     if ( found > 50 ) return found; /* Error */
     if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
 
-    printf("Got %d %d.\n", j, i); /* FEVS 64  -4294967295 BUG FIXME */
+    printf("Got %d %d.\n", j, i);
 
     /* Track minimum and maximum fitnesses */
     /* session->fitnesssum += session->population[i].fitness; */
@@ -593,11 +616,14 @@ int GA_checkfitness(GA_session *session) {
       min = session->population[i].fitness;
     if ( j == 0 || session->population[i].fitness > max )
       max = session->population[i].fitness;
+    avgtmp += session->population[i].fitness;
     j++;
   }
 #endif	/* unless 0 */
+  printf("AVRG %03u %f\n", session->generation,
+         avgtmp/session->settings->popsize);
   /* Show statistics of caching effectiveness */
-  printf("FEVS %u  -%u\n", fevs, i-fevs);
+  printf("FEVS %u  -%u\n", fevs, j-fevs);
 
   /* Scale fitnesses to range 0.5-1.0 */
   offset = 0-min;	     /* Shift range for lower bound at zero */
@@ -611,7 +637,7 @@ int GA_checkfitness(GA_session *session) {
     scalelen += (1-scalelen)*(scaleidx-session->generation)/scaleidx;
   /* printf("min %10u => %f\nmax %10u => %f\noffset   %f   scale %f\n",0,min,0,max,offset,scale); */
 
-  for ( i = 0; i < session->popsize; i++ ) {
+  for ( i = 0; i < session->settings->popsize; i++ ) {
     session->population[i].unscaledfitness = session->population[i].fitness;
     if ( 0 )			/* Shift but don't scale fitness values */
       session->population[i].fitness += offset;
@@ -635,13 +661,14 @@ int GA_checkfitness(GA_session *session) {
   /* Sort the sorted list. */
   GA_comparator(session, NULL);	/* Initialize comparator */
   printf("%u\n", session->sorted[0]);
-  qsort(&(session->sorted[0]), session->popsize, sizeof(unsigned int),
-	GA_comparator);
+  qsort(&(session->sorted[0]), session->settings->popsize,
+        sizeof(unsigned int), GA_comparator);
   printf("%u\n", session->sorted[0]);
   session->fittest = session->sorted[0]; /* Since sorting seems to work */
   if ( session->sorted[0] != session->fittest ) {
     /* Did not choose same item. Do full comparison, return error if fails */
     /* FIXME - Completely broken!!! (Fails for ga-numbers) */
+    /* Does this work now? */
     int mc = memcmp(&(session->population[session->sorted[0]].segments[0]),
 		    &(session->population[session->fittest  ].segments[0]),
 		    sizeof(GA_segment)*session->population[session->fittest].segmentcount);
@@ -668,7 +695,18 @@ int GA_checkfitness(GA_session *session) {
 
 GA_segment graydecode(GA_segment gray) { 
   GA_segment bin;
+#if GA_segment_size == 32
+  /* Optimization: b = b^(g>>1);b = b^(b>>2); ...4; ... 8; ... 16;
+     IF(64BIT,...32) -- can be much faster. */
+  bin = gray;
+  bin ^= bin>>1;
+  bin ^= bin>>2;
+  bin ^= bin>>4;
+  bin ^= bin>>8;
+  bin ^= bin>>16;
+#else
   for ( bin = 0; gray; gray >>= 1 ) bin ^= gray; 
+#endif
   return bin; 
 }
 
@@ -751,6 +789,8 @@ static int astrcat(char **s, const char *append) {
  * \param global_count    The number of non-problem-specific options.
  * \param my_parse_option Option parsing function for problem-specific options.
  * \param my_usage        Usage message for problem-specific options.
+ * \param optlog          Reallocable string to log options into, or NULL.
+ * \param optlogtype      Origin of option ("F"ile or Command-line "A"rguments)
  *
  * \see GA_getopt
  *
@@ -786,7 +826,6 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
      }
      if ( msg && rc > 0 ) astrcat(optlog, msg);
    }
-     
 
    /* Detect the end of the options. */
    if (c == -1)
@@ -822,6 +861,15 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
      break;
    case 'T':
      settings->threadcount = atoi(optarg);
+     break;
+   case 'E':
+     settings->elitism = atoi(optarg);
+     break;
+   case 'M':
+     settings->mutationrate = atof(optarg);
+     break;
+   case 'W':
+     settings->mutationweight = atof(optarg);
      break;
    case 'h':
    case '?':
@@ -870,7 +918,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
     {"generations", required_argument, NULL, 'g'},
     /** -p, --population NUMBER
      *
-     * The number of individuals in the population.
+     * The number of individuals in the population. Must be even.
      */
     {"population", required_argument, NULL, 'p'},
     /** -s, --seed NUMBER
@@ -893,13 +941,35 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
      * threading is not available, must specify 1.
      */
     {"threads",   required_argument, 0, 'T'},
+    /** -E, --elitism NUMBER
+     *
+     * Number of top performers to be carried over into the next
+     * generation.  Must be even.
+     */
+    {"elitism",   required_argument, 0, 'E'},
+    /** -M, --mutationrate NUMBER
+     *
+     * Mutation rate, in 0-1. Mutation probability per segment per two
+     * individuals. Each of the two individuals has 2/3 probability of
+     * having a mutation. Bit position for the two mutations is the
+     * same.
+     */
+    {"mutationrate",   required_argument, 0, 'M'},
+    /** -W, --mutationweight NUMBER
+     *
+     * Mutation weight, nonnegative. Controls the weight of the random
+     * mutation towards less significant bits. >1 weights to less
+     * significant bits, <1 weights to more significant bits, 1 is
+     * unweighted.
+     */
+    {"mutationweight",  required_argument, 0, 'W'},
     /*
       {"verbose", no_argument,       &verbose_flag, 1},
       {"brief",   no_argument,       &verbose_flag, 0},
     */
     {0, 0, 0, 0}
   };
-  static const char *global_optstring = "c:g:p:s:hDT:";
+  static const char *global_optstring = "c:g:p:s:hDT:E:M:W:";
   int c;
   struct option *long_options;
   struct option config_options[2] = {global_long_options[0],{0,0,0,0}};

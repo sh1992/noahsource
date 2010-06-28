@@ -47,6 +47,19 @@ typedef struct GA_settings_struct {
   unsigned int popsize;
   /** The number of generations to run for. */
   unsigned int generations;
+  /** Mutation rate, in 0-1. Mutation probability per segment per two
+   * individuals. Each of the two individuals has 2/3 probability of
+   * having a mutation. Bit position for the two mutations is the
+   * same. */
+  double mutationrate;
+  /** Mutation weight, nonnegative. Controls the weight of the random
+   * mutation towards more or less significant bits. The forumula for
+   * determining the bit to mutate is int(B*R^W), where R in 0-1 is
+   * random, B is GA_segment_size, and W is the mutation weight.
+   */
+  double mutationweight;
+  /** Elitism count. If odd, round down to next even number. */
+  unsigned int elitism;
   /** If false, assume not in "debug mode", where stdout is redirected
    * to a file, and the real stdout is available in stdoutfd. */
   int debugmode;
@@ -90,8 +103,6 @@ typedef struct GA_session_struct {
   /** A list of indexes into the population, sorted by fitness. The
    * most fit individual is first. */
   unsigned int *sorted;
-  /** The number of individuals in the population. */
-  unsigned int popsize;
   /** The generation of the population. The initial random population
    * is generation 0.
    */
@@ -160,8 +171,8 @@ int GA_defaultsettings(GA_settings *settings);
  *     compile-time definition of GA_segment.
  *
  * \returns 0 to indicate success, 1 through 7 if a memory allocation
- * failed, 20 if an invalid thread count is specified, 21 if an error
- * occurs starting a thread, 25 if the thread_init function fails, 30
+ * failed, 50 if an invalid thread count is specified, 51 if an error
+ * occurs starting a thread, 55 if the thread_init function fails, 90
  * if any fitness function failed.
  */
 int GA_init(GA_session *session, GA_settings *settings,
