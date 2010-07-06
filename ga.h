@@ -60,6 +60,16 @@ typedef struct GA_settings_struct {
   double mutationweight;
   /** Elitism count. If odd, round down to next even number. */
   unsigned int elitism;
+  /** Use dynamic mutation. */
+  unsigned int dynmut;
+  /* Dynamic mutation, width for consideration of change in fitness */
+  unsigned int dynmut_width;
+  /* */
+  unsigned int dynmut_factor;
+  /* Dynamic mutation, minimum mutation rate. */
+  double dynmut_min;
+  /* Dynamic mutation, range of mutation rate (min+range=max). */
+  double dynmut_range;
   /** If false, assume not in "debug mode", where stdout is redirected
    * to a file, and the real stdout is available in stdoutfd. */
   int debugmode;
@@ -114,9 +124,15 @@ typedef struct GA_session_struct {
   double fitnesssum;
   /** The size of the fitnesscache. */
   unsigned int cachesize;
+  /** Dynamic mutation leading fitness. */
+  double dynmut_leading;
+  /** Dynamic mutation trailing fitness buffer. */
+  double *dynmut_trailing;
+  /** Dynamic mutation trailing fitness buffer index. */
+  unsigned int dynmut_trailing_pos;
+
   /** Pointer to the GA_settings structure for this session. */
   GA_settings *settings;
-
   /** Array of GA_thread structures, representing each thread. */
   GA_thread *threads;
 #if THREADS

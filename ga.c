@@ -41,6 +41,11 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->mutationrate = 0.5;
     settings->mutationweight = 1;
     settings->elitism = 8;
+    settings->dynmut = 0;
+    settings->dynmut_width = 50;
+    settings->dynmut_factor = 10;
+    settings->dynmut_min = 0.1;
+    settings->dynmut_range = 0.8;
     settings->ref = NULL;
 #ifdef THREADS
     settings->threadcount = 2;
@@ -128,8 +133,14 @@ int GA_init(GA_session *session, GA_settings *settings,
       if ( !session->fitnesscache[i][j].segments ) return 8;
     }
   }
+  /* Allocate the dynmut buffer (freed in GA_cleanup) */
+  session->dynmut_trailing =
+    malloc(sizeof(double)*session->settings->dynmut_width);
+  if ( !session->dynmut_trailing ) return 9;
   /* Check settings for validity */
   if ( settings->mutationrate < 0 || settings->mutationrate > 1 ) return 31;
+  if ( session->settings->dynmut_min+session->settings->dynmut_range > 1 )
+      return 32;
   if ( settings->threadcount < 1 ) return 50;
 #if THREADS
   session->inflag = 0;
@@ -197,6 +208,7 @@ int GA_cleanup(GA_session *session) {
     free(session->fitnesscache[i]);
   }
   free(session->fitnesscache);
+  free(session->dynmut_trailing);
   return 0;
 }
 
@@ -534,7 +546,7 @@ static void *GA_do_thread (void * arg) {
 int GA_checkfitness(GA_session *session) {
   unsigned int i, j;
   int rc;
-  double min, max, avgtmp;
+  double min, max, mean;
   double offset, scale, scalelen;
   int scaleidx;
   unsigned int fevs = 0;
@@ -616,12 +628,28 @@ int GA_checkfitness(GA_session *session) {
       min = session->population[i].fitness;
     if ( j == 0 || session->population[i].fitness > max )
       max = session->population[i].fitness;
-    avgtmp += session->population[i].fitness;
+    mean += session->population[i].fitness;
     j++;
   }
 #endif	/* unless 0 */
-  printf("AVRG %03u %f\n", session->generation,
-         avgtmp/session->settings->popsize);
+  mean = mean/session->settings->popsize;
+  if ( session->settings->dynmut ) { /* Dynamic Mutation */
+    double a, b = session->dynmut_trailing[session->dynmut_trailing_pos], d;
+    session->dynmut_leading = session->dynmut_leading*
+      (session->settings->dynmut_factor-1.0)/session->settings->dynmut_factor
+      + mean;
+    a = session->dynmut_leading/session->settings->dynmut_factor;
+    session->dynmut_trailing[session->dynmut_trailing_pos] = a;
+    session->dynmut_trailing_pos =
+      (session->dynmut_trailing_pos+1) % session->settings->dynmut_width;
+    d = (session->generation < session->settings->dynmut_width) ? -0.693147 : (a-b);
+    session->settings->mutationrate = session->settings->dynmut_min +
+      exp(-fabs(d))*session->settings->dynmut_range;
+    printf("DYNM %03u AVG %10.3f  A %10.3f  B %10.3f  D %10.3f  R %10.3f\n",
+           session->generation, mean, a, b, d,
+           session->settings->mutationrate);
+  }
+  else printf("DYNM %03u AVG %10.3f\n", session->generation, mean);
   /* Show statistics of caching effectiveness */
   printf("FEVS %u  -%u\n", fevs, j-fevs);
 
@@ -871,6 +899,21 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
    case 'W':
      settings->mutationweight = atof(optarg);
      break;
+   case 10: /* --dynamic-mutation */
+     settings->dynmut = 1;
+     break;
+   case 11: /* --dynamic-mutation-width */
+     settings->dynmut_width = atoi(optarg);
+     break;
+   case 12: /* --dynamic-mutation-factor */
+     settings->dynmut_factor = atoi(optarg);
+     break;
+   case 13: /* --dynamic-mutation-min */
+     settings->dynmut_min = atof(optarg);
+     break;
+   case 14: /* --dynamic-mutation-range */
+     settings->dynmut_range = atof(optarg);
+     break;
    case 'h':
    case '?':
      /* getopt_long already printed an error message. */
@@ -963,6 +1006,44 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
      * unweighted.
      */
     {"mutationweight",  required_argument, 0, 'W'},
+    /** --dynamic-mutation
+     *
+     * Enable dynamic mutation (increase mutation rate when fitness is
+     * stagnant). --mutationrate has little effect in this mode.
+     *
+     * How it works: Basically, it maintains "leading" and "trailing" values,
+     * with the trailing value T equal to the leading value from w ("width")
+     * generations ago, and leading value L is updated each generation by
+     * L=L*(f-1)/f+F, where F is the average fitness of the generation and f
+     * is the "factor". From this a new mutation rate M is computed by
+     * M=m+exp(-|D|)*r, where D=(L-T)/f, m is "min" and r is "range".
+     */
+    {"dynamic-mutation", no_argument, 0, 10},
+    /** --dynamic-mutation-width NUMBER
+     *
+     * No effect unless dynamic mutation is enabled.
+     * Width for consideration of change in fitness.
+     */
+    {"dynamic-mutation-width", required_argument, 0, 11},
+    /** --dynamic-mutation-factor NUMBER
+     *
+     * No effect unless dynamic mutation is enabled.
+     * Arbitrary factor used in computation of dynamic mutation.
+     */
+    {"dynamic-mutation-factor", required_argument, 0, 12},
+    /** --dynamic-mutation-min NUMBER
+     *
+     * No effect unless dynamic mutation is enabled.
+     * Minimum mutation rate, in 0-1.
+     */
+    {"dynamic-mutation-min", required_argument, 0, 13},
+    /** --dynamic-mutation-range NUMBER
+     *
+     * No effect unless dynamic mutation is enabled.
+     * Range of mutation rates, in 0-1 (Maximum mutation rate is
+     * minimum+range, which must be less than or equal to 1).
+     */
+    {"dynamic-mutation-range", required_argument, 0, 14},
     /*
       {"verbose", no_argument,       &verbose_flag, 1},
       {"brief",   no_argument,       &verbose_flag, 0},
