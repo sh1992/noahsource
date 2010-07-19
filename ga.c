@@ -1151,7 +1151,6 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 int qprintf(const GA_settings *settings, const char *format, ...) {
   va_list ap;
   int rc = 0;
-  va_start(ap, format);
 #if THREADS
   { /* LOCK io */
     int trc = pthread_mutex_lock(&iomutex);
@@ -1160,9 +1159,14 @@ int qprintf(const GA_settings *settings, const char *format, ...) {
   flockfile(stdout);
   /* flockfile(settings->stdoutfh); */
 #endif
+  va_start(ap, format);
   rc = vprintf(format, ap);
-  if ( !settings->debugmode ) 
+  va_end(ap);
+  if ( !settings->debugmode ) {
+    va_start(ap, format);
     rc = vfprintf(settings->stdoutfh, format, ap);
+    va_end(ap);
+  }
 #if THREADS
   /* funlockfile(settings->stdoutfh); */
   funlockfile(stdout);
@@ -1171,14 +1175,12 @@ int qprintf(const GA_settings *settings, const char *format, ...) {
     if ( trc ) { printf("qprintf: mutex_unlock(io): %d\n", trc); exit(1); }
   }
 #endif
-  va_end(ap);
   return rc;
 }
 
 int tprintf(const char *format, ...) {
   va_list ap;
   int rc = 0;
-  va_start(ap, format);
 #if THREADS
   { /* LOCK io */
     int trc = pthread_mutex_lock(&iomutex);
@@ -1186,7 +1188,9 @@ int tprintf(const char *format, ...) {
   }
   flockfile(stdout);
 #endif
+  va_start(ap, format);
   rc = vprintf(format, ap);
+  va_end(ap);
 #if THREADS
   funlockfile(stdout);
   { /* UNLOCK io */
@@ -1194,7 +1198,6 @@ int tprintf(const char *format, ...) {
     if ( trc ) { printf("tprintf: mutex_unlock(io): %d\n", trc); exit(1); }
   }
 #endif
-  va_end(ap);
   return rc;
 }
 
@@ -1220,6 +1223,7 @@ int invisible_system(int stdoutfd, int argc, ...) {
   for ( i = 0; i < argc; i++ ) {
     argv[i] = va_arg(ap, char *);
   }
+  va_end(ap);
   argv[argc] = NULL;
   /*
   sa.sa_handler = SIG_IGN;
@@ -1261,7 +1265,6 @@ int invisible_system(int stdoutfd, int argc, ...) {
   stat = pthread_mutex_unlock(&iomutex);
   if ( stat ) { printf("tprintf: mutex_unlock(io): %d\n", stat); exit(1); }
 #endif
-  va_end(ap);
 
   if (pid == -1) {
     stat = -1; /* errno comes from fork() */
