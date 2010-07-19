@@ -25,3 +25,8 @@ set xrange [8700:18300]
 set yrange [0:*]
 plot "$FN" using 1:(exp(\$3)) with impulses $TITLE, 0 lt 0 title ""
 EOF
+
+if [ "$EXT" = ".png" ]; then
+    LOGFN="`perl -e '$_=$ARGV[0];s/(\.\w*)?$/.log/;print $_' "$1"`"
+    perl plotfitness.pl $LOGFN
+fi

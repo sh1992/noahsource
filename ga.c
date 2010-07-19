@@ -38,14 +38,14 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->randomseed = urandom();
     settings->popsize = 64;
     settings->generations = 100;
-    settings->mutationrate = 0.5;
-    settings->mutationweight = 1;
+    settings->mutationrate = 0.015625; /* Expecting 1/2 in 32 bits flipped */
+    settings->mutationweight = 0;
     settings->elitism = 8;
     settings->dynmut = 0;
     settings->dynmut_width = 50;
     settings->dynmut_factor = 10;
-    settings->dynmut_min = 0.1;
-    settings->dynmut_range = 0.8;
+    settings->dynmut_min = 0.005;
+    settings->dynmut_range = 0.5; /* Derived from notamol-20100715a runs */
     settings->ref = NULL;
 #ifdef THREADS
     settings->threadcount = 2;
@@ -257,32 +257,30 @@ int GA_evolve(GA_session *session,
 	       olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
 
 	/* Mutation. Low-probability bitflip. */
-	if ( random_r(&session->rs, &afirst) ) perror("random");
-	if ( (double)afirst/RAND_MAX < session->settings->mutationrate ) {
-	  if ( random_r(&session->rs, &afirst) ) perror("random");
-	  afirst = afirst%3+1;
-	  if ( random_r(&session->rs, &bitpos) ) perror("random");
-	  /* Weighted mutation: Bias towards less significant bits */
-	  bitpos = GA_segment_size*powf(((double)bitpos/RAND_MAX),
-	                                session->settings->mutationweight);
-          /* Guard against floating point inaccuracies */
-          if ( bitpos < 0 ) bitpos = 0;
-          if ( bitpos > 31 ) bitpos = 31;
-	  /* bitpos = bitpos%GA_segment_size; */
+	for ( bitpos = 0; bitpos < GA_segment_size; bitpos++ ) {
+	  unsigned int k;
 	  mask = 1<<bitpos;
-	  printf("FLP%01x %08x     %08x     ",
-		 afirst, newa, newb);
-	  if ( afirst & 1 ) newa ^= mask;
-	  if ( afirst & 2 ) newb ^= mask;
-	  printf("to %08x %08x mask %2d %08x\n",
-		 newa, newb, bitpos, mask);
+	  for ( k = 0; k < 2; k++ ) { /* Outer loop is pairwise */
+	    double threshold = session->settings->mutationrate *
+	      powf((double)(GA_segment_size-bitpos)/GA_segment_size,
+	           session->settings->mutationweight);
+	    /* Mutation probability */
+            if ( random_r(&session->rs, &afirst) ) perror("random");
+            if ( !( (double)afirst/RAND_MAX < threshold ) ) continue;
+            printf("FLIP %08x     ", (k == 0) ? newa : newb);
+            if ( k == 0 ) newa ^= mask;
+            else newb ^= mask;
+            printf("to %08x mask %2d %08x\n",
+                   (k == 0) ? newa : newb, bitpos, mask);
+	  }
 	}
-	else printf("FLP0 %08x     %08x     \n", newa, newb);
+
 	/* Insert new segments */
 	session->newpop[i].segments[j] = newa;
 	session->newpop[i+1].segments[j] = newb;
       }
     }
+
     /* Swap newpop into population */
     GA_individual *temp = session->population;
     session->population = session->newpop;
@@ -992,18 +990,15 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
     {"elitism",   required_argument, 0, 'E'},
     /** -M, --mutationrate NUMBER
      *
-     * Mutation rate, in 0-1. Mutation probability per segment per two
-     * individuals. Each of the two individuals has 2/3 probability of
-     * having a mutation. Bit position for the two mutations is the
-     * same.
+     * Mutation rate, in 0-1. Mutation probability per bit, subject to
+     * mutation weight and dynamic mutation.
      */
     {"mutationrate",   required_argument, 0, 'M'},
     /** -W, --mutationweight NUMBER
      *
      * Mutation weight, nonnegative. Controls the weight of the random
-     * mutation towards less significant bits. >1 weights to less
-     * significant bits, <1 weights to more significant bits, 1 is
-     * unweighted.
+     * mutation towards less significant bits. 0 is unweighted, >0 weights
+     * to less significant bits.
      */
     {"mutationweight",  required_argument, 0, 'W'},
     /** --dynamic-mutation

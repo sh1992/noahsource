@@ -47,28 +47,29 @@ typedef struct GA_settings_struct {
   unsigned int popsize;
   /** The number of generations to run for. */
   unsigned int generations;
-  /** Mutation rate, in 0-1. Mutation probability per segment per two
-   * individuals. Each of the two individuals has 2/3 probability of
-   * having a mutation. Bit position for the two mutations is the
-   * same. */
+  /** Mutation rate, in 0-1. Mutation probability per bit. Varies due to
+   *  mutation weight. Modified during run by dynamic mutation.
+   *
+   * \see mutationweight
+   */
   double mutationrate;
   /** Mutation weight, nonnegative. Controls the weight of the random
-   * mutation towards more or less significant bits. The forumula for
-   * determining the bit to mutate is int(B*R^W), where R in 0-1 is
-   * random, B is GA_segment_size, and W is the mutation weight.
+   * mutation towards more or less significant bits. Probability of a given
+   * bit mutating is R*((S-B)/S)^W, where R is the mutation rate, S is the
+   * GA_segment_size, B is the bit position, and W is the mutation weight.
    */
   double mutationweight;
   /** Elitism count. If odd, round down to next even number. */
   unsigned int elitism;
   /** Use dynamic mutation. */
   unsigned int dynmut;
-  /* Dynamic mutation, width for consideration of change in fitness */
+  /** Dynamic mutation, width for consideration of change in fitness */
   unsigned int dynmut_width;
-  /* */
+  /** Dynamic mutation, factor used for exponential decay of old data */
   unsigned int dynmut_factor;
-  /* Dynamic mutation, minimum mutation rate. */
+  /** Dynamic mutation, minimum mutation rate. */
   double dynmut_min;
-  /* Dynamic mutation, range of mutation rate (min+range=max). */
+  /** Dynamic mutation, range of mutation rate (min+range=max). */
   double dynmut_range;
   /** If false, assume not in "debug mode", where stdout is redirected
    * to a file, and the real stdout is available in stdoutfd. */
