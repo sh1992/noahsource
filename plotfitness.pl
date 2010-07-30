@@ -31,7 +31,7 @@ foreach $fn ( @ARGV ) {
     $ytop++;
 
     $outfn = $fn;
-    die "Invalid filename format: $fn\n" unless $outfn =~ s/\.log$/-fitness.png/;
+    die "Invalid filename format: $fn\n" unless $outfn =~ s/\.log(\.crushed)?$/-fitness.png/;
 
     open G, '|-', 'gnuplot';
     print G <<END;

@@ -18,6 +18,10 @@
 #include "ga.h"
 #include "ga-spectroscopy.usage.h"
 
+#ifdef USE_SPCAT_OBJ
+#include "spcat-obj/spcat-obj.h"
+#endif
+
 #define BINS 600		/* Number of bins to use for comparison */
 #define RANGEMIN 8700		/* Ignore below this frequency */
 #define RANGEMAX 18300		/* Ignore above this frequency */
@@ -26,7 +30,8 @@
 
 /* char tempdir[16]; */
 
-const char input_suffixes[2][4] = {"var", "int"};
+/* Use same order as spcat_ext and spcat_efile in spcat-obj.h */
+const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
 typedef struct {
   float a, b;
@@ -34,7 +39,9 @@ typedef struct {
 typedef struct {
   datarow *compdata;		/* Data storage for comparison */
   int compdatasize, compdatacount;
+#ifndef USE_SPCAT_OBJ
   char *basename_temp;		/* Basename of temporary file */
+#endif
 } specthreadopts_t;
 typedef struct {
   char *basename_out;		/* Basename of output file */
@@ -49,6 +56,7 @@ typedef struct {
   char template[2][2048];	/* Input file template */
 } specopts_t;
 
+#ifndef USE_SPCAT_OBJ
 char *make_spec_temp(char *dir) {
   int i = 0;
   int touched = 0;
@@ -58,6 +66,7 @@ char *make_spec_temp(char *dir) {
   if ( !basename ) return NULL;
   filename = malloc(fnsize = strlen(dir)+100);
   if ( !filename ) return NULL;
+  /* Try to find temporary filename that does not already exist */
   while ( touched < 4 ) {
     int j;
     touched = 0;
@@ -78,8 +87,11 @@ char *make_spec_temp(char *dir) {
       if ( rc < 0 ) break;
     }
   }
+  free(filename);
   return basename;
 }
+#endif
+
 int load_spec_templates(specopts_t *opts) {
   int i;
   char *filename;
@@ -170,6 +182,15 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
       perror("Failed to close input file");
       return i+1;
     }
+  }
+  return 0;
+}
+
+int generate_input_buffers(specopts_t *opts, char *buffers[], size_t bufsizes[], GA_segment *x) {
+  int i;
+  for ( i = 0; i < 2; i++ ) {
+    if ( ( bufsizes[i] = asprintf(&buffers[i], opts->template[i], x[0], x[1], x[2]) ) < 0 )
+      return i+1;
   }
   return 0;
 }
@@ -421,7 +442,6 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
   GA_segment x[SEGMENTS];
   int i = 0;
-  char filename[128];
   FILE *fh;
   float a,b;
   int rc = 0;
@@ -430,8 +450,37 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   const double binsize = ((double)(RANGEMAX-RANGEMIN))/opts->bins;
   double obsbin[opts->bins], compbin[opts->bins];
   int obsbincount[opts->bins], compbincount[opts->bins];
+#ifdef USE_SPCAT_OBJ
+  spcs_t spcs;
+  char *buffers[NFILE];
+  size_t bufsizes[NFILE];
+#else
+  char filename[128];
+#endif
   for ( i = 0; i < SEGMENTS; i++ ) x[i] = graydecode(elem->segments[i]);
 
+  /* Check basic constraints */
+  if ( x[0] < x[1] || x[1] < x[2] || x[2] <= 0 ) {
+    elem->fitness = NAN;
+    return 0;
+  }
+
+#ifdef USE_SPCAT_OBJ
+  /* Generate SPCAT input buffer */
+  rc = generate_input_buffers(opts, buffers, bufsizes, x);
+  if ( rc != 0 ) return rc;
+  if ( init_spcs(&spcs) ) return 11;
+  if ( spcat(&spcs, buffers, bufsizes) ) return 12;
+  if ( free_spcs(&spcs) ) return 13;
+  free(buffers[0]); free(buffers[1]);
+  /* Read SPCAT output buffer */
+  if ( !bufsizes[ecat] ) fh = NULL;
+  else if ( ( fh = fmemopen(buffers[ecat], bufsizes[ecat], "r") ) == NULL ) {
+    perror("Failed to open file");
+    return 15;
+  }
+  /******** FIXME TODO NEED TO SORT ********/
+#else
   /* Generate SPCAT input file */
   rc = generate_input_files(opts, thrs->basename_temp, x);
   if ( rc != 0 ) return rc;
@@ -439,20 +488,13 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* Run SPCAT. Append a '.' to the end of the filename so that it
    * doesn't choke on filenames with '.' in them (like ./foo).
    */
-#if 1
+
   /* This way we can avoid running /bin/sh for every fitness
    * evaluation. This doesn't quite work as expected -- ^C often
    * fails if we use the recommended signal handling code. */
   snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
   tprintf("Running %s %s\n", opts->spcatbin, filename);
   i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
-#else
-  snprintf(filename, sizeof(filename), "%s %s.", opts->spcatbin,
-	   thrs->basename_temp);
-  tprintf("Running %s\n", filename);
-  i = invisible_system(opts->devnullfd, 3, "/bin/sh", "-c", filename);
-  /* i = system(filename); */
-#endif
 
   if ( i != 0 ) return 11;		/* Failed */
   if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) )
@@ -464,10 +506,13 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     perror("Failed to open  file");
     return 15;
   }
+#endif
+
   thrs->compdatacount = 0;
   while ( 1 ) {
     /* Magic incantation for: NUMBER [IGNORED NUMBER] NUMBER [REST OF LINE] */
-    rc = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
+    if ( fh ) rc = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
+    else break; // Empty memfile wasn't opened
     if ( rc == EOF && ferror(fh) ) {
       perror("Failed to read template file");
       return 21;
@@ -576,11 +621,13 @@ int GA_thread_init(GA_thread *thread) {
   opts->compdatasize = 0;
   opts->compdatacount = 0;
 
+#ifndef USE_SPCAT_OBJ
   /* Use separate temporary files for each thread. */
   opts->basename_temp = make_spec_temp("temp");
   if ( opts->basename_temp == NULL ) return 1;
   qprintf(thread->session->settings, "Using temporary file %s\n",
 	  opts->basename_temp);
+#endif
 
   thread->ref = (void *)opts;
   return 0;
@@ -588,9 +635,10 @@ int GA_thread_init(GA_thread *thread) {
 
 int GA_thread_free(GA_thread *thread) {
   specthreadopts_t *thrs = (specthreadopts_t *)(thread->ref);
-  char *filename;
 
   /* Remove temporary files. */
+#ifndef USE_SPCAT_OBJ
+  char *filename;
   if ( ( filename = malloc(strlen(thrs->basename_temp)+5) ) != NULL ) {
     int i;
     for ( i = 0; i < 2; i++ ) {
@@ -601,11 +649,13 @@ int GA_thread_free(GA_thread *thread) {
 	unlink(filename);
       }
     }
+    free(filename);
   }
   else qprintf(thread->session->settings,
 	       "Could not delete temporary files: Out of memory\n");
-
   free(thrs->basename_temp);
+#endif
+
   free(thrs->compdata);
   free(thrs);
   return 0;

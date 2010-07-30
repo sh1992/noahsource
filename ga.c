@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include "ga.h"
 #include "ga.usage.h"
 
@@ -196,6 +197,7 @@ int GA_cleanup(GA_session *session) {
   for ( i = 0; i < session->settings->threadcount; i++ ) {
     GA_thread_free(&session->threads[i]);
   }
+  free(session->threads);
   for ( i = 0; i < session->settings->popsize; i++ ) {
     free(session->population[i].segments);
     free(session->newpop[i].segments);
@@ -420,7 +422,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
     int rc = 0;
     if ( ((rc = GA_fitness(session, thread->ref, /* FIXME */
 			   &session->population[i])) != 0)
-	 || isnan(session->population[i].fitness) ) {
+	 /* || isnan(session->population[i].fitness) */ ) { /* nan okay now */
       qprintf(session->settings, "fitness error %u %f => %d\n",
 	      session->population[i].segments[0],
 	      session->population[i].fitness, rc);
@@ -542,7 +544,7 @@ static void *GA_do_thread (void * arg) {
 #endif
 
 int GA_checkfitness(GA_session *session) {
-  unsigned int i, j;
+  unsigned int i, j, cfinite;
   int rc;
   double min, max, mean;
   double offset, scale, scalelen;
@@ -578,7 +580,7 @@ int GA_checkfitness(GA_session *session) {
   if ( rc ) { qprintf(session->settings,
 		      "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
 #endif
-  j = 0; i = 0;
+  j = 0; i = 0; cfinite = 0;
   while ( j < session->settings->popsize ) {
     int found;
 #if THREADS
@@ -621,16 +623,20 @@ int GA_checkfitness(GA_session *session) {
     printf("Got %d %d.\n", j, i);
 
     /* Track minimum and maximum fitnesses */
+    j++;
+    if ( isnan(session->population[i].fitness) ) continue; /* Killed item */
+
     /* session->fitnesssum += session->population[i].fitness; */
-    if ( j == 0 || session->population[i].fitness < min )
+    if ( cfinite == 0 || session->population[i].fitness < min )
       min = session->population[i].fitness;
-    if ( j == 0 || session->population[i].fitness > max )
+    if ( cfinite == 0 || session->population[i].fitness > max )
       max = session->population[i].fitness;
     mean += session->population[i].fitness;
-    j++;
+    cfinite++;
   }
 #endif	/* unless 0 */
-  mean = mean/session->settings->popsize;
+  printf("cfinite=%u vs %u\n", cfinite, session->settings->popsize);
+  mean = mean/(cfinite ? cfinite : 1);/* session->settings->popsize; */
   if ( session->settings->dynmut ) { /* Dynamic Mutation */
     double a, b = session->dynmut_trailing[session->dynmut_trailing_pos], d;
     session->dynmut_leading = session->dynmut_leading*
@@ -665,8 +671,8 @@ int GA_checkfitness(GA_session *session) {
 
   for ( i = 0; i < session->settings->popsize; i++ ) {
     session->population[i].unscaledfitness = session->population[i].fitness;
-    if ( 0 )			/* Shift but don't scale fitness values */
-      session->population[i].fitness += offset;
+    if ( isnan(session->population[i].fitness) ) /* Killed: Minimal fitness */
+      session->population[i].fitness = 0; /* FIXME: Incorrect Constant? */
     else			/* Shift and scale fitness values */
       session->population[i].fitness =
 	(session->population[i].fitness+offset)*scalelen/scale+(1-scalelen);
@@ -686,10 +692,10 @@ int GA_checkfitness(GA_session *session) {
 
   /* Sort the sorted list. */
   GA_comparator(session, NULL);	/* Initialize comparator */
-  printf("%u\n", session->sorted[0]);
+  /* printf("%u\n", session->sorted[0]); */
   qsort(&(session->sorted[0]), session->settings->popsize,
         sizeof(unsigned int), GA_comparator);
-  printf("%u\n", session->sorted[0]);
+  /* printf("%u\n", session->sorted[0]); */
   session->fittest = session->sorted[0]; /* Since sorting seems to work */
   if ( session->sorted[0] != session->fittest ) {
     /* Did not choose same item. Do full comparison, return error if fails */
@@ -850,7 +856,7 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
 	 }
        }
      }
-     if ( msg && rc > 0 ) astrcat(optlog, msg);
+     if ( msg && rc > 0 ) { astrcat(optlog, msg); free(msg); }
    }
 
    /* Detect the end of the options. */
@@ -1144,6 +1150,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
   optind = 1;
   GA_run_getopt(argc, argv, settings, optstring, long_options,
 		global_count, my_parse_option, my_usage, optlog, 'A');
+  free(optstring);
   free(long_options);
   return 0;
 }
@@ -1201,6 +1208,36 @@ int tprintf(const char *format, ...) {
   return rc;
 }
 
+/* From http://www.linuxquestions.org/questions/programming-9/how-to-calculate-time-difference-in-milliseconds-in-c-c-711096/ */
+long long
+timeval_diff(struct timeval *difference,
+             struct timeval *end_time,
+             struct timeval *start_time
+            )
+{
+  struct timeval temp_diff;
+
+  if(difference==NULL)
+  {
+    difference=&temp_diff;
+  }
+
+  difference->tv_sec =end_time->tv_sec -start_time->tv_sec ;
+  difference->tv_usec=end_time->tv_usec-start_time->tv_usec;
+
+  /* Using while instead of if below makes the code slightly more robust. */
+
+  while(difference->tv_usec<0)
+  {
+    difference->tv_usec+=1000000;
+    difference->tv_sec -=1;
+  }
+
+  return 1000000LL*difference->tv_sec+
+                   difference->tv_usec;
+
+} /* timeval_diff() */
+
 /** Start a process with STDOUT redirected to the file descriptor
  * stdoutfd, wait for it to finish, and then return its exit status.
  * This function based on the sample implementation of system from:
@@ -1216,6 +1253,8 @@ int invisible_system(int stdoutfd, int argc, ...) {
   va_list ap;
   char **argv;
   int i;
+  /* FIXME - Debug only */
+  struct timeval starttime, endtime;
   if ( argc <= 0 ) return 1;
   argv = malloc(sizeof(char*)*(argc+1));
   if ( !argv ) return 1;
@@ -1244,6 +1283,7 @@ int invisible_system(int stdoutfd, int argc, ...) {
 #endif
   flockfile(stdout);
   fflush(NULL);
+  gettimeofday(&starttime, NULL);/* To compute runtime */
   if ((pid = fork()) == 0) {
     /*
     sigaction(SIGINT, &savintr, (struct sigaction *)0);
@@ -1265,6 +1305,7 @@ int invisible_system(int stdoutfd, int argc, ...) {
   stat = pthread_mutex_unlock(&iomutex);
   if ( stat ) { printf("tprintf: mutex_unlock(io): %d\n", stat); exit(1); }
 #endif
+  free(argv);
 
   if (pid == -1) {
     stat = -1; /* errno comes from fork() */
@@ -1276,6 +1317,8 @@ int invisible_system(int stdoutfd, int argc, ...) {
       }
     }
   }
+  gettimeofday(&endtime, NULL);
+  printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
   /*
   sigaction(SIGINT, &savintr, (struct sigaction *)0);
   sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
@@ -1284,3 +1327,4 @@ int invisible_system(int stdoutfd, int argc, ...) {
 
   return(stat);
 }
+

@@ -10,10 +10,15 @@ all: ga-numbers ga-spectroscopy
 
 ga-numbers: ga.c
 
-ga-spectroscopy: ga.c
+ga-spectroscopy: ga.c spcat.a
+
+spcat.a:
+	make -C spcat-obj spcat.a
+	cp -p spcat-obj/spcat.a .
 
 clean:
-	-rm -f *.o ga-numbers ga-spectroscopy
+	-make -C spcat-obj clean
+	-rm -f *.o *.a ga-numbers ga-spectroscopy
 	-rm -rf doc/{html,latex}
 
 doc: Doxyfile *.c *.h .PHONY
