@@ -279,6 +279,21 @@ extern int GA_thread_init(GA_thread *thread);
  */
 extern int GA_thread_free(GA_thread *thread);
 
+/** Quickly check the fitness of the given individual against basic
+ * constraints. If this function returns a zero value (unfit), the
+ * individual will be rejected and a new one generated in its place.
+ *
+ * \returns 0 for unfit, nonzero for fit.
+ */
+extern int GA_fitness_quick(const GA_session *ga, GA_individual *elem);
+
+/** Generate a random number 
+ *
+ * \returns 0 for success, nonzero for error.
+ */
+extern int GA_random_segment(GA_session *ga, const unsigned int i,
+                             const unsigned int j, int *r);
+
 /* \} */
 
 /* Gray code helper functions */

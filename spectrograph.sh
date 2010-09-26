@@ -4,6 +4,7 @@
 #
 # Usage: spectrograph.sh [FILE.cat] [format] [title]
 #
+BINDIR=$(dirname $(readlink -f $0))
 FN="`perl -e '$_=$ARGV[0];s/(\.\w*)?$/.cat/;print $_' "$1"`"
 TITLE=""
 FORMAT=postscript
@@ -12,11 +13,19 @@ if [ "$2" = "png" ]; then
     FORMAT="png size 800,600"
     EXT=.png
 fi
-if [ -n "$3" ]; then
+if [ -n "$3" ]; then    
     TITLE="title \"$3\""
 fi
+OUT="`perl -e '$_=$ARGV[0];s/(\.\w*)?$/$ARGV[1]/;print $_' "$FN" ".int"`"
+if [ -f $OUT ]; then
+    $BINDIR/spcat $FN || exit 1
+else
+    echo
+    echo WARNING
+    echo SPCAT .INT/.VAR files missing! Plotting .CAT file anyway...
+    echo
+fi
 OUT="`perl -e '$_=$ARGV[0];s/(\.\w*)?$/$ARGV[1]/;print $_' "$FN" "$EXT"`"
-./spcat $FN || exit 1
 echo "$FN" '=>' "$OUT"
 gnuplot <<EOF
 set term $FORMAT
@@ -28,5 +37,11 @@ EOF
 
 if [ "$EXT" = ".png" ]; then
     LOGFN="`perl -e '$_=$ARGV[0];s/(\.\w*)?$/.log/;print $_' "$1"`"
-    perl plotfitness.pl $LOGFN
+    if [ -f $LOGFN ]; then
+        perl $BINDIR/plotfitness.pl $LOGFN
+    else
+        echo
+        echo WARNING: No log file, not creating fitness plot
+        echo
+    fi
 fi

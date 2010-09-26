@@ -38,7 +38,7 @@ foreach $fn ( @ARGV ) {
 set term png size 1200,480
 set output "$outfn"
 set xrange [0:*]
-set yrange [-45:$ytop]
+#set yrange [-45:$ytop]
 set y2range [0:3]
 set y2tics 0,1,1
 set grid y2tics

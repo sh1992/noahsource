@@ -107,12 +107,19 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->population[i].segments = malloc(segmentmallocsize);
     if ( !session->population[i].segments ) return 4;
     /* Generate initial population */
-    for ( j = 0; j < segmentcount; j++ ) {
-      int r;
-      if ( random_r(&session->rs, &r) ) perror("random");
-      session->population[i].segments[j] = (GA_segment)r;
-    }
-    session->population[i].fitness = 0;
+    do {
+      printf("Generating initial pop %03d\n", i);
+      for ( j = 0; j < segmentcount; j++ ) {
+        int r;
+        /*
+        if ( random_r(&session->rs, &r) ) perror("random");
+        */
+        if ( GA_random_segment(session, i, j, &r) ) perror("random");
+        session->population[i].segments[j] = (GA_segment)r;
+      }
+      session->population[i].fitness = 0;
+    } while ( !GA_fitness_quick(session, &session->population[i]) );
+
     /* Allocate newpop element */
     memset(&(session->newpop[i]), 0, sizeof(GA_individual));
     session->newpop[i].segmentcount = segmentcount;
@@ -219,7 +226,7 @@ int GA_evolve(GA_session *session,
   if ( generations == 0 ) generations = session->settings->generations;
   unsigned int gen;
   for ( gen = 0; gen < generations; gen++ ) {
-    unsigned int i;
+    unsigned int i, ntimes = 0;
     /* Keep top 8 members of the old population. */
     for ( i = 0; i < session->settings->elitism; i++ ) {
       unsigned int j;
@@ -230,7 +237,7 @@ int GA_evolve(GA_session *session,
     }
     /* Create a new population by roulette wheel.
        (Consider: Top half roulette wheel/Keep top 8?) */
-    for ( ; i < session->settings->popsize; i+= 2 ) {
+    for ( ; i < session->settings->popsize; /* See bottom of loop */ ) {
       unsigned int a = GA_roulette(session);
       unsigned int b = GA_roulette(session);
       GA_segment olda, oldb;
@@ -255,8 +262,10 @@ int GA_evolve(GA_session *session,
 	  printf("\nNITM %03d %03d %03d %03d\n",
 	      session->generation+1, i, i+1, j);
 	*/
+	/*
 	printf("XOVR %08x %3d %08x %3d to %08x %08x mask %2d %08x %08x\n",
 	       olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
+	*/
 
 	/* Mutation. Low-probability bitflip. */
 	for ( bitpos = 0; bitpos < GA_segment_size; bitpos++ ) {
@@ -269,18 +278,27 @@ int GA_evolve(GA_session *session,
 	    /* Mutation probability */
             if ( random_r(&session->rs, &afirst) ) perror("random");
             if ( !( (double)afirst/RAND_MAX < threshold ) ) continue;
-            printf("FLIP %08x     ", (k == 0) ? newa : newb);
+            /* printf("FLIP %08x     ", (k == 0) ? newa : newb); */
             if ( k == 0 ) newa ^= mask;
             else newb ^= mask;
+            /*
             printf("to %08x mask %2d %08x\n",
-                   (k == 0) ? newa : newb, bitpos, mask);
+                   (k == 0) ? newa : newb, bitpos, mask); */
 	  }
 	}
-
 	/* Insert new segments */
 	session->newpop[i].segments[j] = newa;
 	session->newpop[i+1].segments[j] = newb;
       }
+      /* Verify that new population elements are valid */
+      if ( GA_fitness_quick(session, &session->newpop[i]) &&
+           GA_fitness_quick(session, &session->newpop[i+1]) ) {
+        /* Continue to next loop iteration */
+        i += 2;
+        printf("REGENERATED %d\n", ntimes);
+        ntimes = 0;
+      }
+      else ntimes++;
     }
 
     /* Swap newpop into population */
@@ -837,7 +855,8 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
    /* getopt_long stores the option index here. */
    int option_index = 0;
 
-   c = getopt_long(argc,argv, optstring, long_options, &option_index);
+   /* tprintf("%d %s %s\n%d %x\n%d\n", argc, argv[1], argv[2], optind, argv); */
+   c = getopt_long(argc, argv, optstring, long_options, &option_index);
 
    /* Record to optlog */
    if ( optlog && *optlog ) {
@@ -1115,7 +1134,9 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
     /* printf("Loading config file %s\n", loadconfig); */
     while ( 1 ) {
       char *key = NULL; char *value = NULL;
-      char *fake_argv[3];
+      typedef char *foo;
+      foo fake_argv[4];
+      fake_argv[2] = fake_argv[3] = 0;
       int rc = fscanf(fh, " %ms%*[ \t]%m[^\n]", &key, &value);
       /* printf("%d %p %p\n", rc, key, value); */
       if ( rc == EOF && ferror(fh) ) {
@@ -1126,6 +1147,12 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 	exit(1);
       }
       else if ( rc == EOF ) break;
+      else if ( rc >= 1 && ( key[0] == '#' || key[0] == ';' || key[0] == '%' ||
+                             key[0] == '!' ) ) { /* Common comment characters */
+        free(key);
+        free(value);
+        continue;
+      }
       else if ( rc < 1 || rc > 2 || !key ) {
 	printf("%s: %s: Syntax error\n", argv[0], loadconfig);
 	exit(1);
@@ -1140,9 +1167,9 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
       optind = 1;
       GA_run_getopt(rc+1, fake_argv, settings, optstring, long_options,
 		    global_count, my_parse_option, my_usage, optlog, 'F');
-      free(fake_argv[1]);
+      /* free(fake_argv[1]); */
       free(key);
-      free(value);
+      /* free(value); */ /* Don't free value, we might keep a pointer to it */
     }
     fclose(fh);
   }

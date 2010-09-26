@@ -54,6 +54,10 @@ typedef struct {
   datarow *observation;		/* Data storage for observation */
   int observationsize, observationcount;
   char template[2][2048];	/* Input file template */
+  int userange[SEGMENTS];
+  int rangetemp[SEGMENTS];
+  GA_segment rangemin[SEGMENTS];
+  GA_segment rangemax[SEGMENTS];
 } specopts_t;
 
 #ifndef USE_SPCAT_OBJ
@@ -216,6 +220,30 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 'w':
     ((specopts_t *)settings->ref)->distanceweight = atof(optarg);
     break;
+  case 20: /* amin */
+    ((specopts_t *)settings->ref)->rangemin[0] = atoi(optarg);
+    ((specopts_t *)settings->ref)->userange[0] = 1;
+    break;
+  case 21: /* amax */
+    ((specopts_t *)settings->ref)->rangemax[0] = atoi(optarg);
+    ((specopts_t *)settings->ref)->rangetemp[0] = 1;
+    break;
+  case 22: /* bmin */
+    ((specopts_t *)settings->ref)->rangemin[1] = atoi(optarg);
+    ((specopts_t *)settings->ref)->userange[1] = 1;
+    break;
+  case 23: /* bmax */
+    ((specopts_t *)settings->ref)->rangemax[1] = atoi(optarg);
+    ((specopts_t *)settings->ref)->rangetemp[1] = 1;
+    break;
+  case 24: /* cmin */
+    ((specopts_t *)settings->ref)->rangemin[2] = atoi(optarg);
+    ((specopts_t *)settings->ref)->userange[2] = 1;
+    break;
+  case 25: /* cmax */
+    ((specopts_t *)settings->ref)->rangemax[2] = atoi(optarg);
+    ((specopts_t *)settings->ref)->rangetemp[2] = 1;
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -262,6 +290,36 @@ int main(int argc, char *argv[]) {
      *
      * Weight of intensity vs peak count when evaluating each bin. */
     {"weight",     required_argument, 0, 'w'},
+    /** --amin NUMBER
+     *
+     * Minimum A value (in units compatible with template file).
+     */
+    {"amin",       required_argument, 0, 20},
+    /** --amax NUMBER
+     *
+     * Maximum A value (in units compatible with template file).
+     */
+    {"amax",       required_argument, 0, 21},
+    /** --bmin NUMBER
+     *
+     * Minimum B value (in units compatible with template file).
+     */
+    {"bmin",       required_argument, 0, 22},
+    /** --bmax NUMBER
+     *
+     * Maximum B value (in units compatible with template file).
+     */
+    {"bmax",       required_argument, 0, 23},
+    /** --cmin NUMBER
+     *
+     * Minimum C value (in units compatible with template file).
+     */
+    {"cmin",       required_argument, 0, 24},
+    /** --cmax NUMBER
+     *
+     * Maximum C value (in units compatible with template file).
+     */
+    {"cmax",       required_argument, 0, 25},
     {0, 0, 0, 0}
   };
   char *optlog = malloc(128);	/* Initial allocation */
@@ -275,14 +333,30 @@ int main(int argc, char *argv[]) {
   settings.generations = 200;
   settings.ref = &specopts;
   specopts.basename_out = NULL;
-  specopts.template_fn = "template";
-  specopts.obsfile = "isopropanol.cat";
+  specopts.template_fn = "template-404";
+  specopts.obsfile = "isopropanol-404.cat";
   specopts.spcatbin = "./spcat";
   specopts.bins = BINS;
   specopts.distanceweight = 1.0;
+  for ( i = 0; i < SEGMENTS; i++ )
+    specopts.rangemin[i] = specopts.rangemax[i] = 0;
   GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:", my_long_options, my_parseopt,
 	    gaspectroscopy_usage, &optlog);
 
+  /* Check segment ranges */
+  for ( i = 0; i < SEGMENTS; i++ ) {
+    if ( specopts.userange[i]+specopts.rangetemp[i] == 1 ) {
+      /* Must specify both */
+      printf("Cannot specify only one of minimum and maximum range.\n");
+      exit(1);
+    }
+    else if ( specopts.rangemin[i] > specopts.rangemax[i] ) {
+      /* Must be in correct order */
+      printf("Minimum range may not be greater than maximum range.\n");
+      exit(1);
+    }
+  }
+  /* Initialize observation storage */
   specopts.observation = NULL;
   specopts.observationsize = 0;
   specopts.observationcount = 0;
@@ -437,6 +511,49 @@ int main(int argc, char *argv[]) {
   return rc;
 }
 
+int GA_random_segment(GA_session *ga, const unsigned int i,
+                      const unsigned int j, int *r) {
+  specopts_t *opts = (specopts_t *)ga->settings->ref;
+  int rc = random_r(&ga->rs, r);
+  /*
+  GA_segment ideal[] = {2094967296, 1600000000, 100000000};
+  GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
+  */
+  if ( !rc && opts->userange[j] ) {
+    unsigned int realr;
+    realr = (unsigned)((double)(*r)*(opts->rangemax[j]-opts->rangemin[j])
+                       /RAND_MAX)+opts->rangemin[j];
+    *r = grayencode((int)realr);
+    printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
+  }
+  return rc;
+}
+
+int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
+  specopts_t *opts = (specopts_t *)ga->settings->ref;
+  GA_segment x[SEGMENTS];
+  int i = 0;
+  /* WARNING: WE DO THIS TWICE NOW! */
+  for ( i = 0; i < SEGMENTS; i++ ) x[i] = graydecode(elem->segments[i]);
+
+  /* Check basic constraints */
+  if ( x[0] < x[1] || x[1] < x[2] || x[2] <= 0 ) {
+    return 0;
+  }
+  /*
+  GA_segment ideal[] = {2094967296, 1600000000, 100000000};
+  GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
+  */
+  for ( i = 0; i < SEGMENTS; i++ ) {
+    if ( (x[i] < opts->rangemin[i]) || (x[i] > opts->rangemax[i]) ) {
+      printf("Rejecting segment %03d %010u < %010u < %010u\n", i,
+             opts->rangemin[i],x[i],opts->rangemax[i]);
+      return 0;
+    }
+  }
+  return 1;
+}
+
 int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
@@ -457,13 +574,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
 #else
   char filename[128];
 #endif
+  /* WARNING: WE DO THIS TWICE NOW! */
   for ( i = 0; i < SEGMENTS; i++ ) x[i] = graydecode(elem->segments[i]);
-
-  /* Check basic constraints */
-  if ( x[0] < x[1] || x[1] < x[2] || x[2] <= 0 ) {
-    elem->fitness = NAN;
-    return 0;
-  }
 
 #ifdef USE_SPCAT_OBJ
   /* Generate SPCAT input buffer */
@@ -538,7 +650,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     thrs->compdatacount++;
   }
   fclose(fh);
-  
+
   /* Determine fitness */
   tprintf("COUNTS: %d %d\n", opts->observationcount, thrs->compdatacount);
   fitness = 0;
@@ -573,7 +685,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
   for ( i=0; i<opts->bins; i++ ) {
     float comp = opts->distanceweight *
-      powf(fabs(expf(obsbin[i])-expf(compbin[i])),2) +
+      powf(fabs(expf(obsbin[i])-expf(compbin[i])),2) + /* FIXME -wrong base? */
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
     fitness += comp;
   }

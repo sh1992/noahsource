@@ -73,6 +73,15 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   return 0;
 }
 
+int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
+  return 1;
+}
+
+int GA_random_segment(GA_session *ga, const unsigned int i,
+                      const unsigned int j, int *r) {
+  return random_r(&ga->rs, r);
+}
+
 int GA_termination(const GA_session *ga) {
   if ( ga->population[ga->fittest].unscaledfitness > -0.00001 )
     return 1;
