@@ -554,6 +554,15 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
   return 1;
 }
 
+typedef struct { unsigned int index; double total; } sortable_bin;
+
+int bin_comparator(const void *a, const void *b) {
+  sortable_bin x = *(sortable_bin *)a, y = *(sortable_bin *)b;
+  if ( x.total < y.total ) return 1;
+  else if ( x.total > y.total ) return -1;
+  else return 0; /* x-y; */	/* If equal sort by index to preserve order */
+}
+
 int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
@@ -682,12 +691,25 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
       }
     }
   }
+#if 1 /* EXPERIMENTAL BEHAVIOR 2010-09-26 */
+  double binweights[opts->bins];
+  sortable_bin binorder[opts->bins];
+  for ( i = 0; i < opts->bins; i++ ) {
+    binorder[i].index = i; binorder[i].total = compbin[i];
+  }
+  qsort(binorder, opts->bins, sizeof(sortable_bin), bin_comparator);
+  double binmin = binorder[opts->bins-1].total;
+  double bindiff = binorder[0].total-binmin;
+  for ( i = 0; i < opts->bins; i++ ) {
+    binweights[i] = .5+.5*(obsbin[i]-binmin)/bindiff;
+  }
+#endif
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
   for ( i=0; i<opts->bins; i++ ) {
     float comp = opts->distanceweight *
       powf(fabs(expf(obsbin[i])-expf(compbin[i])),2) + /* FIXME -wrong base? */
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
-    fitness += comp;
+    fitness += comp*binweights[i];
   }
 
 #if 0
