@@ -707,7 +707,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
   for ( i=0; i<opts->bins; i++ ) {
     float comp = opts->distanceweight *
-      powf(fabs(expf(obsbin[i])-expf(compbin[i])),2) + /* FIXME -wrong base? */
+      powf(fabs(powf(10,obsbin[i])-powf(10,compbin[i])),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
     fitness += comp*binweights[i];
   }
