@@ -701,7 +701,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   double binmin = binorder[opts->bins-1].total;
   double bindiff = binorder[0].total-binmin;
   for ( i = 0; i < opts->bins; i++ ) {
-    binweights[i] = .5+.5*(obsbin[i]-binmin)/bindiff;
+    binweights[i] = (obsbin[i]-binmin)/bindiff;
   }
 #endif
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
