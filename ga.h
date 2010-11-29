@@ -294,6 +294,13 @@ extern int GA_fitness_quick(const GA_session *ga, GA_individual *elem);
 extern int GA_random_segment(GA_session *ga, const unsigned int i,
                              const unsigned int j, int *r);
 
+/** Task to complete after each generation.
+ * (save state, output progress, etc.)
+ *
+ * \returns 0 for success, nonzero for error.
+ */
+extern int GA_finished_generation(const GA_session *ga, int terminating);
+
 /* \} */
 
 /* Gray code helper functions */

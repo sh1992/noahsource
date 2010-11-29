@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <errno.h>
+#include <ctype.h>
 #include "ga.h"
 #include "ga-spectroscopy.usage.h"
 
@@ -33,9 +34,20 @@
 /* Use same order as spcat_ext and spcat_efile in spcat-obj.h */
 const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
+#define QN_COUNT 2
+#define QN_DIGITS 3
 typedef struct {
-  float a, b;
+  float frequency, intensity;
+  int qn[QN_COUNT*QN_DIGITS];
 } datarow;
+typedef struct {
+  int qn[QN_COUNT*QN_DIGITS];
+  int seen;
+} dblres_check;
+typedef struct {
+  int npeaks;
+  float *peaks;
+} dblres_relation;
 typedef struct {
   datarow *compdata;		/* Data storage for comparison */
   int compdatasize, compdatacount;
@@ -58,6 +70,12 @@ typedef struct {
   int rangetemp[SEGMENTS];
   GA_segment rangemin[SEGMENTS];
   GA_segment rangemax[SEGMENTS];
+  char *popfile;
+  GA_segment *popdata;
+  char *drfile;
+  unsigned int doublereslen;
+  dblres_relation *doubleres;
+  float doublerestol;
 } specopts_t;
 
 #ifndef USE_SPCAT_OBJ
@@ -124,47 +142,104 @@ int load_spec_templates(specopts_t *opts) {
   return 0;
 }
 
+/** Parse Quantum Numbers from SPCAT .CAT files (See spinv.pdf, note
+ * that documentation incorrectly claims valid range is -259..359)
+ *
+ * \returns Quantum number in range -269..359, 9999 to denote
+ *     overflow ("**"), -9999 to denote parse error.
+ */
+int parseqn(const char *str) {
+  int val;
+  //printf("'%s'\n",str);
+  if ( str[0] == '*' || str[1] == '*' ) return 9999; // >359 or <-269
+  if ( !isdigit(str[1]) ) return -9999;
+  val = str[1]-'0';
+  if ( isspace(str[0]) ) ; // Do nothing
+  else if ( isdigit(str[0]) ) val += 10*(str[0]-'0');
+  else if ( isalpha(str[0]) ) {
+    if ( islower(str[0]) ) val = -val-10*(str[0]-'a'+1);
+    else val = val+10*(str[0]-'A')+100;
+  }
+  else if ( str[0] == '-' ) val = -val;
+  else return -9999;
+  return val;
+}
+
+int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
+  float a, b, maxb = 0;
+  char trailing[1024];
+  int i = 0, j = 0;
+  while ( 1 ) {
+    /* Magic incantation for: NUMBER (IGNORED NUMBER) NUMBER (REST OF LINE) */
+    //if ( fh ) i = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
+    // 30310 3 7      10 3 8
+    // 303231013      231014
+    if ( fh ) i = fscanf(fh, "%g %*g %g %*d %*g %*g %*s%1024[^\r\n]",
+                         &a, &b, trailing);
+    else break; // Empty memfile wasn't opened
+    if ( i == EOF && ferror(fh) ) {
+      perror("Failed to read template file");
+      return 3;
+    }
+    else if ( i == EOF ) break;
+    else if ( i != 3 ) {
+      perror("File format error\n");
+      return 4;
+    }
+    //printf("%g %g", a,b);
+    /* Allocate additional memory, if neccessary */
+    if ( *count >= *size ) {
+      *size = ((*size)+1)*2;
+      //printf("Increasing memory allocation to %u\n", thrs->compdatasize);
+      *storage = realloc(*storage, sizeof(datarow)*(*size));
+      if ( *storage == NULL ) {
+	perror("Out of memory\n");
+	return 5;
+      }
+    }
+    if ( *count == 0 || b > maxb ) maxb = b;
+    (*storage)[*count].frequency = a;
+    //printf("POW 10^%f => %g\n", b, powf(10,b));
+    (*storage)[*count].intensity = b;//powf(10,b);
+    /* Double resonance from trailing data */
+    /* FIXME: Assumes quantum numbers are of type 303! */
+    /* PROGRAM DOES NOT SUPPORT VARIABLE QUANTUM NUMBER TYPES */
+    for ( i = 0; i < 2; i++ ) {
+      for ( j = 0; j < 3; j++ ) {
+        char str[3]; int val;
+        str[0] = trailing[4+12*i+j*2];
+        str[1] = trailing[4+12*i+j*2+1];
+        str[2] = 0;
+        val = parseqn(str);
+        //printf("'%s'\n",trailing);
+        if ( val == -9999 ) return 6;
+        //printf(" %d", val);
+        (*storage)[*count].qn[i*3+j] = val;
+      }
+    }
+    //printf("\n");
+    // Next item
+    (*count)++;
+  }
+  //printf("MAXB %g",maxb);
+  for ( i=0; i < *count; i++ ) {
+    //printf("POW 10^%f => ", (*storage)[i].b);
+    (*storage)[i].intensity = powf(10,(*storage)[i].intensity-maxb);
+    //printf("%g\n", (*storage)[i].b);
+  }
+  return 0;
+}
+
 int load_spec_observation(specopts_t *opts) {
   FILE *fh;
-  float a,b;
   int rc = 0;
   if ( ( fh = fopen(opts->obsfile, "r") ) == NULL ) {
     perror("Failed to open observation file");
     return 12;
   }
-  while ( 1 ) {
-    /* Magic incantation for: NUMBER (IGNORED NUMBER) NUMBER (REST OF LINE) */
-    rc = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
-    if ( rc == EOF && ferror(fh) ) {
-      perror("Failed to read template file");
-      return 13;
-    }
-    else if ( rc == EOF ) break;
-    else if ( rc != 2 ) {
-      printf("File format error\n");
-      return 14;
-    }
-    /* Allocate additional memory, if neccessary */
-    if ( opts->observationcount >= opts->observationsize ) {
-      opts->observationsize = (opts->observationsize+1)*2;
-      opts->observation = realloc(opts->observation,
-				  sizeof(datarow)*opts->observationsize);
-      if ( opts->observation == NULL ) {
-	printf("Out of memory\n");
-	return 15;
-      }
-    }
-    /* Add point */
-    /*
-    if ( (observation[observationcount] = malloc(sizeof(float)*2)) == NULL ) {
-      printf("Out of memory\n");
-      return 16;
-    }
-    */
-    opts->observation[opts->observationcount].a = a;
-    opts->observation[opts->observationcount].b = b;
-    opts->observationcount++;
-  }
+  rc = load_catfile(fh, &(opts->observation), &(opts->observationsize),
+                    &(opts->observationcount));
+  if ( rc > 0 ) rc += 10;
   fclose(fh);
   return 0;
 }
@@ -181,6 +256,8 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
       return i+1;
     }
     fprintf(fh, opts->template[i], x[0], x[1], x[2]); /* FIXME */
+    //B+C/B-C
+    //fprintf(fh, opts->template[i], x[0], (x[1]+x[2])/2, (x[1]-x[2])/2); /* FIXME */
     /* Error checking for fprintf? */
     if ( fclose(fh) ) {
       perror("Failed to close input file");
@@ -219,6 +296,15 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
     break;
   case 'w':
     ((specopts_t *)settings->ref)->distanceweight = atof(optarg);
+    break;
+  case 'P':
+    ((specopts_t *)settings->ref)->popfile = optarg;
+    break;
+  case 26: /* drfile */
+    ((specopts_t *)settings->ref)->drfile = optarg;
+    break;
+  case 27:
+    ((specopts_t *)settings->ref)->doublerestol = atof(optarg);
     break;
   case 20: /* amin */
     ((specopts_t *)settings->ref)->rangemin[0] = atoi(optarg);
@@ -290,6 +376,22 @@ int main(int argc, char *argv[]) {
      *
      * Weight of intensity vs peak count when evaluating each bin. */
     {"weight",     required_argument, 0, 'w'},
+    /** -P, --popfile FILE
+     *
+     * File to load initial population from. Lines should be formatted
+     * as "%d %d GD %u %u %u" (same as population output file).
+     */
+    {"popfile",    required_argument, 0, 'P'},
+    /** --drfile FILE
+     *
+     * File containing double resonance data.
+     */
+    {"drfile",     required_argument, 0, 26},
+    /** --drtol TOLERANCE
+     *
+     * Matching tolerance 
+     */
+    {"drtol",      required_argument, 0, 27},
     /** --amin NUMBER
      *
      * Minimum A value (in units compatible with template file).
@@ -340,7 +442,11 @@ int main(int argc, char *argv[]) {
   specopts.distanceweight = 1.0;
   for ( i = 0; i < SEGMENTS; i++ )
     specopts.rangemin[i] = specopts.rangemax[i] = 0;
-  GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:", my_long_options, my_parseopt,
+  specopts.popfile = NULL;
+  specopts.drfile = NULL;
+  specopts.doublereslen = 0;
+  specopts.doublerestol = 2;
+  GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:P:", my_long_options, my_parseopt,
 	    gaspectroscopy_usage, &optlog);
 
   /* Check segment ranges */
@@ -441,6 +547,83 @@ int main(int argc, char *argv[]) {
     qprintf(&settings, "load_spec_observation failed: %d\n", rc);
     return rc;
   }
+  /* Load starting population */
+  if ( specopts.popfile ) {
+    printf("Loading inital population %s\n", specopts.popfile);
+    /* TODO cleanup */
+    specopts.popdata = malloc(sizeof(GA_segment)*SEGMENTS*settings.popsize);
+    if ( !specopts.popdata ) {
+      qprintf(&settings, "load popdata failed\n");
+      return 1;
+    }
+    memset(specopts.popdata, 0, sizeof(specopts.popdata));
+    FILE *fh = fopen(specopts.popfile, "r");
+    unsigned int idx = 0;
+    while ( idx < settings.popsize ) {
+      int rc = fscanf(fh, "%*d %*d GD %u %u %u", &specopts.popdata[idx*SEGMENTS], &specopts.popdata[idx*SEGMENTS+1], &specopts.popdata[idx*SEGMENTS+2]);
+      if ( rc == EOF ) {
+        qprintf(&settings, "load popdata failed: EOF at idx=%u\n", idx);
+        return 1;
+      }
+      idx++;
+    }
+    fclose(fh);
+    for ( idx=0;idx<settings.popsize;idx++ ) {
+      printf("001 %03u GD %10u %10u %10u\n", idx, specopts.popdata[idx*SEGMENTS], specopts.popdata[idx*SEGMENTS+1],specopts.popdata[idx*SEGMENTS+2]);
+    }
+  }
+  /* Load double resonance */
+  if ( specopts.drfile ) {
+    printf("Loading double resonances %s\n", specopts.drfile);
+    /* TODO cleanup */
+    int dblressize = 0;
+    //specopts.doubleres = NULL;
+    //specopts.doublereslen = 0;
+    FILE *fh = fopen(specopts.drfile, "r");
+    if ( fh == NULL ) {
+      perror("Failed to open drfile");
+      return 1;
+    }
+    char *line = NULL; size_t linelen = 0;
+    while ( getline(&line, &linelen, fh) > 0 ) {
+      float val; int ptrbump; char *linepos = line;
+      dblres_relation *row; int peaklistsize = 0;
+      /* Allocate space for the new row */
+      if ( specopts.doublereslen >= dblressize ) {
+        dblressize = (dblressize+1)*2;
+        specopts.doubleres = realloc(specopts.doubleres,
+                                     sizeof(dblres_relation)*dblressize);
+        if ( !specopts.doubleres ) {
+          qprintf(&settings, "Double resonance list allocation failed\n");
+          return 1;
+        }
+      }
+      /* Initilize new relation */
+      row = &specopts.doubleres[specopts.doublereslen];
+      row->npeaks = 0;
+      row->peaks = NULL;
+      while ( sscanf(linepos, "%g%n", &val, &ptrbump) != EOF ) {
+        /* Allocate space for the new entry in the row */
+        if ( row->npeaks >= peaklistsize ) {
+          peaklistsize = (peaklistsize+1)*2;
+          row->peaks = realloc(row->peaks, sizeof(float)*peaklistsize);
+          if ( !row->peaks ) {
+            qprintf(&settings, "Double resonance row allocation failed\n");
+            return 1;
+          }
+        }
+        row->peaks[row->npeaks] = val;
+        row->npeaks++;
+        linepos += ptrbump;
+      }
+      specopts.doublereslen++;
+    }
+    if ( !feof(fh) ) {
+      qprintf(&settings, "Double resonance parse error\n");
+      return 1;
+    }
+    fclose(fh);
+  }
   printf("Using %d bins\n", specopts.bins);
 
   /* Run the genetic algorithm */
@@ -482,19 +665,6 @@ int main(int argc, char *argv[]) {
   starttime = time(NULL)-starttime;
   qprintf(&settings, "Finished.\nTook %u seconds (%f sec/gen)\n",
 	  starttime, starttime/(settings.generations+1.0));
-  /* Save best result */
-  {
-    GA_segment x[SEGMENTS];
-    for ( i = 0; i < SEGMENTS; i++ )
-      x[i] = graydecode(ga.population[ga.fittest].segments[i]);
-    /* Generate SPCAT input file */
-    rc = generate_input_files(&specopts, specopts.basename_out, x);
-    if ( rc != 0 ) {
-      qprintf(&settings, "Final generate_input_files failed: %d\n", rc);
-      return rc;
-    }
-    qprintf(&settings, "Best result saved in %s\n", specopts.basename_out);
-  }
 #endif
   /* Cleanup */
   if ( (rc = GA_cleanup(&ga)) != 0 ) {
@@ -519,14 +689,57 @@ int GA_random_segment(GA_session *ga, const unsigned int i,
   GA_segment ideal[] = {2094967296, 1600000000, 100000000};
   GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
   */
-  if ( !rc && opts->userange[j] ) {
+  if ( opts->popfile ) {
+    rc = 0; // Note that the random state will be completely different.
+    *r = grayencode(opts->popdata[i*SEGMENTS+j]);
+  }
+  else if ( !rc && opts->userange[j] ) {
     unsigned int realr;
     realr = (unsigned)((double)(*r)*(opts->rangemax[j]-opts->rangemin[j])
                        /RAND_MAX)+opts->rangemin[j];
-    *r = grayencode((int)realr);
-    printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
+    *r = grayencode(realr);
+    //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
   }
   return rc;
+}
+
+int GA_finished_generation(const GA_session *ga, int terminating) {
+  specopts_t *opts = (specopts_t *)ga->settings->ref;
+  /* Save best result */
+  int i;
+  unsigned int p;
+  int rc = 0;
+  FILE *fh;
+  char filename[128];
+  snprintf(filename, sizeof(filename), "%s.pop", opts->basename_out);
+  if ( ( fh = fopen(filename, "w") ) == NULL ) {
+    perror("Failed to open population output file");
+    return 10;
+  }
+  for ( p = 0; p < ga->settings->popsize; p++ ) {
+    GA_segment x[SEGMENTS];
+    for ( i = 0; i < SEGMENTS; i++ )
+      x[i] = graydecode(ga->population[p].segments[i]);
+    fprintf(fh, "%03u %03u GD %10u %10u %10u\n", ga->generation, p,
+            x[0], x[1], x[2]);
+    if ( p == ga->fittest ) {
+      /* Generate SPCAT input file */
+      rc = generate_input_files(opts, opts->basename_out, x);
+      if ( rc != 0 ) {
+        qprintf(ga->settings,
+                "finished_generation generate_input_files failed: %d\n", rc);
+        return rc;
+      }
+    }
+  }
+  if ( fclose(fh) ) {
+    perror("Failed to close input file");
+    return 11;
+  }
+
+  if ( terminating )
+    qprintf(ga->settings, "Best result saved in %s\n", opts->basename_out);
+  return 0;
 }
 
 int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
@@ -538,7 +751,7 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
 
   /* Check basic constraints */
   if ( x[0] < x[1] || x[1] < x[2] || x[2] <= 0 ) {
-    return 0;
+    return 0; // commented out for B+C / B-C
   }
   /*
   GA_segment ideal[] = {2094967296, 1600000000, 100000000};
@@ -546,8 +759,10 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
   */
   for ( i = 0; i < SEGMENTS; i++ ) {
     if ( (x[i] < opts->rangemin[i]) || (x[i] > opts->rangemax[i]) ) {
+      /*
       printf("Rejecting segment %03d %010u < %010u < %010u\n", i,
              opts->rangemin[i],x[i],opts->rangemax[i]);
+      */
       return 0;
     }
   }
@@ -567,9 +782,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
   GA_segment x[SEGMENTS];
-  int i = 0;
+  int i = 0, j = 0;
   FILE *fh;
-  float a,b;
   int rc = 0;
   /* int xi, yi; */
   double fitness;
@@ -630,39 +844,94 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
 #endif
 
   thrs->compdatacount = 0;
-  while ( 1 ) {
-    /* Magic incantation for: NUMBER [IGNORED NUMBER] NUMBER [REST OF LINE] */
-    if ( fh ) rc = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
-    else break; // Empty memfile wasn't opened
-    if ( rc == EOF && ferror(fh) ) {
-      perror("Failed to read template file");
-      return 21;
-    }
-    else if ( rc == EOF ) break;
-    else if ( rc != 2 ) {
-      qprintf(ga->settings, "File format error\n");
-      return 22;
-    }
-    /* Allocate additional memory, if neccessary */
-    if ( thrs->compdatacount >= thrs->compdatasize ) {
-      thrs->compdatasize = (thrs->compdatasize+1)*2;
-      tprintf("Increasing memory allocation to %u\n", thrs->compdatasize);
-      thrs->compdata = realloc(thrs->compdata,
-			       sizeof(datarow)*thrs->compdatasize);
-      if ( thrs->compdata == NULL ) {
-	qprintf(ga->settings, "Out of memory\n");
-	return 30;
-      }
-    }
-    thrs->compdata[thrs->compdatacount].a = a;
-    thrs->compdata[thrs->compdatacount].b = b;
-    thrs->compdatacount++;
-  }
+  rc = load_catfile(fh, &(thrs->compdata), &(thrs->compdatasize),
+                  &(thrs->compdatacount));
+  if ( rc > 0 ) return 20+rc;
   fclose(fh);
 
   /* Determine fitness */
   tprintf("COUNTS: %d %d\n", opts->observationcount, thrs->compdatacount);
   fitness = 0;
+
+  /* Check double resonance */
+  
+  /* BUG -- Need to check against *either* of the dblreses of first item
+   * -- they don't need to to all be the same. */
+  
+  dblres_check *drlist = NULL; int drsize = 0; int drfail = 0;
+  for ( i = 0; i < opts->doublereslen; i++ ) { /* For each resonance */
+    int drlen = 0; /* Reset the QN list */
+    printf("Starting QN:\n");
+    /* For each frequency in the resonance */
+    for ( j = 0; j < opts->doubleres[i].npeaks; j++ ) {
+      int k = 0;
+      drfail = 1; /* If we don't find a match for this frequency, fail */
+      for ( k = 0; k < thrs->compdatacount; k++ ) { /* For each actual peak */
+        int l = 0, m = 0;
+        /* Check if this peak is near the resonance frequency */
+        if ( fabsf(thrs->compdata[k].frequency-opts->doubleres[i].peaks[j])
+             > opts->doublerestol ) continue;
+
+        /* For each quantum number associated with the peak */
+        for ( m = 0; m < QN_COUNT; m++ ) {
+          int found = 0;
+          printf("Looking for QN %d %d %d\n", thrs->compdata[k].qn[m*QN_DIGITS], thrs->compdata[k].qn[m*QN_DIGITS+1], thrs->compdata[k].qn[m*QN_DIGITS+2]);
+          /* Check all previously seen quantum numbers */
+          for ( l = 0; l < drlen; l++ ) {
+            int n = 0;
+            /* Specifically, each of the QN_COUNT quantum numbers */
+            for ( n = 0; n < QN_COUNT; n++ ) {
+              if ( memcmp(&(drlist[l].qn[n*QN_DIGITS]),
+                          &(thrs->compdata[k].qn[m*QN_DIGITS]),
+                          sizeof(int)*QN_DIGITS) == 0 ) {
+                /* We found the QN, skip it unless it was also found last time */
+                if ( drlist[l].seen >= j ) {
+                  printf("  Match QN %d %d %d\n", drlist[l].qn[n*QN_DIGITS], drlist[l].qn[n*QN_DIGITS+1], drlist[l].qn[n*QN_DIGITS+2]);
+                  drlist[l].seen = j+1;
+                  found = 1;
+                  /* break; */
+                }
+              }
+            }
+          }
+
+          /* If any matches were found, we haven't failed yet */
+          if ( found ) {
+            drfail = 0;
+            /*
+            if ( memcmp(drlist[l].qn, thrs->compdata[k].qn,
+                        sizeof(drlist[drlen].qn)) != 0 )
+              found = 0; *//* Differs, so add anyway */ /* FIXME */
+          }
+          /* For first frequency in resonance, we can add the QN to the list */
+          if ( !found && j == 0 ) {
+            if ( drlen >= drsize ) {
+              drsize = (drsize+1)*2;
+              //printf("Increasing memory allocation to %u\n", thrs->compdatasize);
+              drlist = realloc(drlist, sizeof(dblres_check)*drsize);
+              if ( drlist == NULL ) {
+	        perror("Out of memory\n");
+	        return 35;
+              }
+            }
+            drlist[drlen].seen = 1;
+            memcpy(drlist[drlen].qn, thrs->compdata[k].qn,
+                   sizeof(drlist[drlen].qn));
+            printf("  Added QN %d %d %d %d %d %d\n", drlist[drlen].qn[0], drlist[drlen].qn[1], drlist[drlen].qn[2], drlist[drlen].qn[3], drlist[drlen].qn[4], drlist[drlen].qn[5]);
+            drlen++;
+            drfail = 0;
+          }
+          else if ( !found ) printf("  Not found\n");
+        }
+      }
+      if ( drfail ) break;
+    }
+    if ( drfail ) break;
+  }
+  if ( drfail ) {
+    elem->fitness = nan("fail"); /* Double resonance failed somewhere */
+    return 0;
+  }
 
   /* Initialize bins */
   for ( i = 0; i < opts->bins; i++ ) {
@@ -670,28 +939,32 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     obsbincount[i] = 0; compbincount[i] = 0;
   }
 
-  for ( i=0; i<opts->observationcount || i<thrs->compdatacount; i++ ) {
-    int j=0;
-    for ( j=0;j<=1;j++ ) {	/* 0=Observed / 1=Generated */
+  //double obsmax=0/*, obsmin = 0*/;
+  for ( j=0;j<=1;j++ ) {	/* 0=Observed / 1=Generated */
+    for ( i=0; i<((j==0)?opts->observationcount:thrs->compdatacount); i++ ) {
       datarow entry;
-      if ( j == 0 ) {		/* j == 0, observation (Observed) */
-	if ( i < opts->observationcount ) entry = opts->observation[i];
-	else continue;
+      if ( j == 0 ) entry = opts->observation[i]; /* Observed */
+      else entry = thrs->compdata[i]; /* Generated */
+      if ( ( entry.frequency < RANGEMIN ) || ( entry.frequency > RANGEMAX ) )
+        continue;
+      /* We're within the valid range */
+      int bin = floor((entry.frequency-RANGEMIN)/binsize);
+      if ( bin >= opts->bins ) bin = opts->bins-1;
+      if ( j == 0 ) {
+        obsbin[bin] += entry.intensity;
+        obsbincount[bin]++;
+        //if ( i == 0 || entry.b > obsmax ) obsmax = entry.b;
       }
-      else {			/* j == 1, compdata (Generated) */
-	if ( i < thrs->compdatacount ) entry = thrs->compdata[i];
-	else continue;
-      }
-      if ( ( entry.a >= RANGEMIN ) && ( entry.a <= RANGEMAX ) ) {
-	/* We're within the valid range */
-	int bin = floor((entry.a-RANGEMIN)/binsize);
-	if ( bin >= opts->bins ) bin = opts->bins-1;
-	if ( j == 0 ) { obsbin[bin] += entry.b; obsbincount[bin]++; }
-	else { compbin[bin] += entry.b; compbincount[bin]++; }
+      else {
+        //double weight = fabs(entry.b/obsmax);
+        //if ( weight < 1 ) weight = 1;
+        /* Prediction - scale me */
+        compbin[bin] += entry.intensity;//*weight;
+        compbincount[bin]++;
       }
     }
   }
-#if 1 /* EXPERIMENTAL BEHAVIOR 2010-09-26 */
+#if 0 /* EXPERIMENTAL BEHAVIOR 2010-09-26 */
   double binweights[opts->bins];
   sortable_bin binorder[opts->bins];
   for ( i = 0; i < opts->bins; i++ ) {
@@ -707,9 +980,9 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
   for ( i=0; i<opts->bins; i++ ) {
     float comp = opts->distanceweight *
-      powf(fabs(powf(10,obsbin[i])-powf(10,compbin[i])),2) +
+      powf(fabs(obsbin[i]-compbin[i]),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
-    fitness += comp*binweights[i];
+    fitness += comp;//*binweights[i];
   }
 
 #if 0
@@ -730,7 +1003,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   }
 #endif
 
-  elem->fitness = -fitness;
+  elem->fitness = -fitness*1000;
   /* printf("%u\n",elem->segments[0]); */
   /* elem->fitness = -fabs(64-(double)x[0]*x[0]); */
   /* elem->fitness = (fitness > MAX_FITNESS) ? 0 : (MAX_FITNESS - fitness); */

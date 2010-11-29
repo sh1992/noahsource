@@ -36,10 +36,41 @@ Number of top performers to be carried over into the next
 generation.  Must be even.
 
 -M, --mutationrate NUMBER
-Mutation rate, in 0-1. Mutation probability per segment per two
-individuals. Each of the two individuals has 2/3 probability of
-having a mutation. Bit position for the two mutations is the
-same.
+Mutation rate, in 0-1. Mutation probability per bit, subject to
+mutation weight and dynamic mutation.
+
+-W, --mutationweight NUMBER
+Mutation weight, nonnegative. Controls the weight of the random
+mutation towards less significant bits. 0 is unweighted, >0 weights
+to less significant bits.
+
+--dynamic-mutation
+Enable dynamic mutation (increase mutation rate when fitness is
+stagnant). --mutationrate has little effect in this mode.
+
+How it works: Basically, it maintains "leading" and "trailing" values,
+with the trailing value T equal to the leading value from w ("width")
+generations ago, and leading value L is updated each generation by
+L=L*(f-1)/f+F, where F is the average fitness of the generation and f
+is the "factor". From this a new mutation rate M is computed by
+M=m+exp(-|D|)*r, where D=(L-T)/f, m is "min" and r is "range".
+
+--dynamic-mutation-width NUMBER
+No effect unless dynamic mutation is enabled.
+Width for consideration of change in fitness.
+
+--dynamic-mutation-factor NUMBER
+No effect unless dynamic mutation is enabled.
+Arbitrary factor used in computation of dynamic mutation.
+
+--dynamic-mutation-min NUMBER
+No effect unless dynamic mutation is enabled.
+Minimum mutation rate, in 0-1.
+
+--dynamic-mutation-range NUMBER
+No effect unless dynamic mutation is enabled.
+Range of mutation rates, in 0-1 (Maximum mutation rate is
+minimum+range, which must be less than or equal to 1).
 
 Problem-specific options:
 
@@ -64,3 +95,25 @@ Number of bins for matching. (default at time of writing was
 
 -w, --weight NUMBER
 Weight of intensity vs peak count when evaluating each bin.
+
+-P, --popfile FILE
+File to load initial population from. Lines should be formatted
+as "%d %d GD %u %u %u" (same as population output file).
+
+--amin NUMBER
+Minimum A value (in units compatible with template file).
+
+--amax NUMBER
+Maximum A value (in units compatible with template file).
+
+--bmin NUMBER
+Minimum B value (in units compatible with template file).
+
+--bmax NUMBER
+Maximum B value (in units compatible with template file).
+
+--cmin NUMBER
+Minimum C value (in units compatible with template file).
+
+--cmax NUMBER
+Maximum C value (in units compatible with template file).

@@ -316,7 +316,10 @@ int GA_evolve(GA_session *session,
 
     printf("\n");
     if ( GA_checkfitness(session) != 0 ) return 1;
-    if ( GA_termination(session) ) return 0;
+    // Save output on each generation
+    int rc = GA_termination(session);
+    if ( GA_finished_generation(session, rc) != 0 ) return 2;
+    if ( rc ) return 0;
   }
 
   return 0;
@@ -1133,11 +1136,16 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
     }
     /* printf("Loading config file %s\n", loadconfig); */
     while ( 1 ) {
-      char *key = NULL; char *value = NULL;
+      char *key = malloc(512*sizeof(char));
+      char *value = malloc(4096*sizeof(char));
       typedef char *foo;
       foo fake_argv[4];
       fake_argv[2] = fake_argv[3] = 0;
-      int rc = fscanf(fh, " %ms%*[ \t]%m[^\n]", &key, &value);
+      if ( !key || !value ) {
+        printf("%s: %s: Allocation error", argv[0], loadconfig);
+        exit(1);
+      }
+      int rc = fscanf(fh, " %511s%*[ \t]%4095[^\n]", key, value);
       /* printf("%d %p %p\n", rc, key, value); */
       if ( rc == EOF && ferror(fh) ) {
 	char *str;
