@@ -3,7 +3,7 @@
 # Makefile for project
 #
 
-override CFLAGS += -Wall -DDEBUG -lm -lpthread -g -D_GNU_SOURCE
+override CFLAGS += -Wall -DDEBUG -lm -lpthread -g -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
 ga-spectroscopy: CFLAGS += -DGA_segment=uint32_t -DGA_segment_size=32 -DTHREADS
 
 all: ga-numbers ga-spectroscopy

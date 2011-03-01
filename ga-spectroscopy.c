@@ -76,6 +76,7 @@ typedef struct {
   unsigned int doublereslen;
   dblres_relation *doubleres;
   float doublerestol;
+  unsigned obsrangemin, obsrangemax; /* Ignore outside these frequencies */
 } specopts_t;
 
 #ifndef USE_SPCAT_OBJ
@@ -330,6 +331,12 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
     ((specopts_t *)settings->ref)->rangemax[2] = atoi(optarg);
     ((specopts_t *)settings->ref)->rangetemp[2] = 1;
     break;
+  case 28: /* rangemin */
+    ((specopts_t *)settings->ref)->obsrangemin = atoi(optarg);
+    break;
+  case 29: /* rangemax */
+    ((specopts_t *)settings->ref)->obsrangemax = atoi(optarg);
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -422,6 +429,16 @@ int main(int argc, char *argv[]) {
      * Maximum C value (in units compatible with template file).
      */
     {"cmax",       required_argument, 0, 25},
+    /** --rangemin NUMBER
+     *
+     * Minimum observation range.
+     */
+    {"rangemin",   required_argument, 0, 28},
+    /** --rangemax NUMBER
+     *
+     * Maximum observation range.
+     */
+    {"rangemax",   required_argument, 0, 29},
     {0, 0, 0, 0}
   };
   char *optlog = malloc(128);	/* Initial allocation */
@@ -446,6 +463,8 @@ int main(int argc, char *argv[]) {
   specopts.drfile = NULL;
   specopts.doublereslen = 0;
   specopts.doublerestol = 2;
+  specopts.obsrangemin = RANGEMIN;
+  specopts.obsrangemax = RANGEMAX;
   GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:P:", my_long_options, my_parseopt,
 	    gaspectroscopy_usage, &optlog);
 
@@ -787,9 +806,10 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   int rc = 0;
   /* int xi, yi; */
   double fitness;
-  const double binsize = ((double)(RANGEMAX-RANGEMIN))/opts->bins;
+  const double binsize = ((double)(opts->obsrangemax-opts->obsrangemin))/opts->bins;
   double obsbin[opts->bins], compbin[opts->bins];
   int obsbincount[opts->bins], compbincount[opts->bins];
+  double binweights[opts->bins]; /* 20110215, J-weighting */
 #ifdef USE_SPCAT_OBJ
   spcs_t spcs;
   char *buffers[NFILE];
@@ -857,11 +877,12 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   
   /* BUG -- Need to check against *either* of the dblreses of first item
    * -- they don't need to to all be the same. */
+  /* Isn't that fixed ? */
   
   dblres_check *drlist = NULL; int drsize = 0; int drfail = 0;
   for ( i = 0; i < opts->doublereslen; i++ ) { /* For each resonance */
     int drlen = 0; /* Reset the QN list */
-    printf("Starting QN:\n");
+    //printf("Starting QN:\n");
     /* For each frequency in the resonance */
     for ( j = 0; j < opts->doubleres[i].npeaks; j++ ) {
       int k = 0;
@@ -875,7 +896,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
         /* For each quantum number associated with the peak */
         for ( m = 0; m < QN_COUNT; m++ ) {
           int found = 0;
-          printf("Looking for QN %d %d %d\n", thrs->compdata[k].qn[m*QN_DIGITS], thrs->compdata[k].qn[m*QN_DIGITS+1], thrs->compdata[k].qn[m*QN_DIGITS+2]);
+          //printf("Looking for QN %d %d %d\n", thrs->compdata[k].qn[m*QN_DIGITS], thrs->compdata[k].qn[m*QN_DIGITS+1], thrs->compdata[k].qn[m*QN_DIGITS+2]);
           /* Check all previously seen quantum numbers */
           for ( l = 0; l < drlen; l++ ) {
             int n = 0;
@@ -886,7 +907,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
                           sizeof(int)*QN_DIGITS) == 0 ) {
                 /* We found the QN, skip it unless it was also found last time */
                 if ( drlist[l].seen >= j ) {
-                  printf("  Match QN %d %d %d\n", drlist[l].qn[n*QN_DIGITS], drlist[l].qn[n*QN_DIGITS+1], drlist[l].qn[n*QN_DIGITS+2]);
+                  //printf("  Match QN %d %d %d\n", drlist[l].qn[n*QN_DIGITS], drlist[l].qn[n*QN_DIGITS+1], drlist[l].qn[n*QN_DIGITS+2]);
                   drlist[l].seen = j+1;
                   found = 1;
                   /* break; */
@@ -917,11 +938,11 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
             drlist[drlen].seen = 1;
             memcpy(drlist[drlen].qn, thrs->compdata[k].qn,
                    sizeof(drlist[drlen].qn));
-            printf("  Added QN %d %d %d %d %d %d\n", drlist[drlen].qn[0], drlist[drlen].qn[1], drlist[drlen].qn[2], drlist[drlen].qn[3], drlist[drlen].qn[4], drlist[drlen].qn[5]);
+            //printf("  Added QN %d %d %d %d %d %d\n", drlist[drlen].qn[0], drlist[drlen].qn[1], drlist[drlen].qn[2], drlist[drlen].qn[3], drlist[drlen].qn[4], drlist[drlen].qn[5]);
             drlen++;
             drfail = 0;
           }
-          else if ( !found ) printf("  Not found\n");
+          //else if ( !found ) printf("  Not found\n");
         }
       }
       if ( drfail ) break;
@@ -937,6 +958,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   for ( i = 0; i < opts->bins; i++ ) {
     obsbin[i] = 0; compbin[i] = 0;
     obsbincount[i] = 0; compbincount[i] = 0;
+    binweights[i] = 0;
   }
 
   //double obsmax=0/*, obsmin = 0*/;
@@ -945,10 +967,10 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
       datarow entry;
       if ( j == 0 ) entry = opts->observation[i]; /* Observed */
       else entry = thrs->compdata[i]; /* Generated */
-      if ( ( entry.frequency < RANGEMIN ) || ( entry.frequency > RANGEMAX ) )
+      if ( ( entry.frequency < opts->obsrangemin ) || ( entry.frequency > opts->obsrangemax ) )
         continue;
       /* We're within the valid range */
-      int bin = floor((entry.frequency-RANGEMIN)/binsize);
+      int bin = floor((entry.frequency-opts->obsrangemin)/binsize);
       if ( bin >= opts->bins ) bin = opts->bins-1;
       if ( j == 0 ) {
         obsbin[bin] += entry.intensity;
@@ -961,6 +983,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
         /* Prediction - scale me */
         compbin[bin] += entry.intensity;//*weight;
         compbincount[bin]++;
+        //printf("BW: sqrt(2/%d)\n",entry.qn[0]+entry.qn[3]);
+        binweights[bin] += sqrt(2.0/(entry.qn[0]+entry.qn[3])); /* 20110215 */
       }
     }
   }
@@ -982,7 +1006,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     float comp = opts->distanceweight *
       powf(fabs(obsbin[i]-compbin[i]),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
-    fitness += comp;//*binweights[i];
+    fitness += comp*binweights[i];
   }
 
 #if 0

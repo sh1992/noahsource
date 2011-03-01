@@ -52,10 +52,11 @@ done
 case "$FORMAT" in
     png)
         FORMAT="png size 800,600"
+        #FORMAT="png size 1600,1200 giant"
         EXT=.png
         ;;
     postscript)
-        FORMAT=postscript
+        FORMAT="postscript"
         EXT=.ps
         ;;
     *)
