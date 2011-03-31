@@ -537,7 +537,8 @@ int main(int argc, char *argv[]) {
   specopts.bins = BINS;
   specopts.distanceweight = 1.0;
   for ( i = 0; i < SEGMENTS; i++ )
-    specopts.userange[i] = specopts.rangemin[i] = specopts.rangemax[i] = 0;
+    specopts.userange[i] = specopts.rangetemp[i] = specopts.rangemin[i] =
+      specopts.rangemax[i] = 0;
   specopts.popfile = NULL;
   specopts.drfile = NULL;
   specopts.doublereslen = 0;
