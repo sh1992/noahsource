@@ -27,7 +27,7 @@
 #define RANGEMIN 8700		/* Ignore below this frequency */
 #define RANGEMAX 18300		/* Ignore above this frequency */
 
-#define SEGMENTS 3		/* See also fprintf in generate_input_files */
+#define SEGMENTS 8		/* See also fprintf in generate_input_files */
 
 /* char tempdir[16]; */
 
@@ -36,6 +36,7 @@ const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
 #define QN_COUNT 2
 #define QN_DIGITS 3
+/** One row of a .CAT file */
 typedef struct {
   float frequency, intensity;
   int qn[QN_COUNT*QN_DIGITS];
@@ -48,6 +49,7 @@ typedef struct {
   int npeaks;
   float *peaks;
 } dblres_relation;
+/** Thread-local data */
 typedef struct {
   datarow *compdata;		/* Data storage for comparison */
   int compdatasize, compdatacount;
@@ -55,6 +57,7 @@ typedef struct {
   char *basename_temp;		/* Basename of temporary file */
 #endif
 } specthreadopts_t;
+/** Settings */
 typedef struct {
   char *basename_out;		/* Basename of output file */
   char *template_fn;		/* Filename of template file */
@@ -77,6 +80,7 @@ typedef struct {
   dblres_relation *doubleres;
   float doublerestol;
   unsigned obsrangemin, obsrangemax; /* Ignore outside these frequencies */
+  int linkbc;
 } specopts_t;
 
 #ifndef USE_SPCAT_OBJ
@@ -250,13 +254,26 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
   int i;
   for ( i = 0; i < 2; i++ ) {
     FILE *fh;
+    int j;
+    char djkstr[5][16];
     snprintf(filename, sizeof(filename), "%s.%s", basename,
 	     input_suffixes[i]);
     if ( ( fh = fopen(filename, "w") ) == NULL ) {
       perror("Failed to open input file");
       return i+1;
     }
-    fprintf(fh, opts->template[i], x[0], x[1], x[2]); /* FIXME */
+    // 
+    for ( j = 0; j < 5; j++ ) {
+      GA_segment v = x[3+j];
+      const int zero = ~(1<<(GA_segment_size-1)); // (0xfff...fff)/2
+      sprintf(djkstr[j], "%s%u", (v>0)?"-":"",
+              (v > zero) ? (v-zero) : (zero-v));
+    }
+    fprintf(fh, opts->template[i], x[0] /* A */,
+            opts->linkbc?((x[1]+x[2])/2):x[1] /* B */,
+            opts->linkbc?((x[1]-x[2])/2):x[2] /* C */,
+            djkstr[0], djkstr[1], djkstr[2], djkstr[3], djkstr[4]
+           ); /* FIXME */
     //B+C/B-C
     //fprintf(fh, opts->template[i], x[0], (x[1]+x[2])/2, (x[1]-x[2])/2); /* FIXME */
     /* Error checking for fprintf? */
@@ -301,41 +318,48 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 'P':
     ((specopts_t *)settings->ref)->popfile = optarg;
     break;
-  case 26: /* drfile */
-    ((specopts_t *)settings->ref)->drfile = optarg;
-    break;
-  case 27:
-    ((specopts_t *)settings->ref)->doublerestol = atof(optarg);
-    break;
   case 20: /* amin */
-    ((specopts_t *)settings->ref)->rangemin[0] = atoi(optarg);
-    ((specopts_t *)settings->ref)->userange[0] = 1;
+  case 22: /* bmin */
+  case 24: /* cmin */
+  case 26: /* djmin */
+  case 28: /* djkmin */
+  case 30: /* dkmin */
+  case 32: /* deljmin */
+  case 34: /* delkmin */
+    {
+      int i = c/2-10;
+      ((specopts_t *)settings->ref)->rangemin[i] = atoi(optarg);
+      ((specopts_t *)settings->ref)->userange[i] = 1;
+    }
     break;
   case 21: /* amax */
-    ((specopts_t *)settings->ref)->rangemax[0] = atoi(optarg);
-    ((specopts_t *)settings->ref)->rangetemp[0] = 1;
-    break;
-  case 22: /* bmin */
-    ((specopts_t *)settings->ref)->rangemin[1] = atoi(optarg);
-    ((specopts_t *)settings->ref)->userange[1] = 1;
-    break;
   case 23: /* bmax */
-    ((specopts_t *)settings->ref)->rangemax[1] = atoi(optarg);
-    ((specopts_t *)settings->ref)->rangetemp[1] = 1;
-    break;
-  case 24: /* cmin */
-    ((specopts_t *)settings->ref)->rangemin[2] = atoi(optarg);
-    ((specopts_t *)settings->ref)->userange[2] = 1;
-    break;
   case 25: /* cmax */
-    ((specopts_t *)settings->ref)->rangemax[2] = atoi(optarg);
-    ((specopts_t *)settings->ref)->rangetemp[2] = 1;
+  case 27: /* djmax */
+  case 29: /* djkmax */
+  case 31: /* dkmax */
+  case 33: /* deljmax */
+  case 35: /* delkmax */
+    {
+      int i = (c-1)/2-10;
+      ((specopts_t *)settings->ref)->rangemax[i] = atoi(optarg);
+      ((specopts_t *)settings->ref)->rangetemp[i] = 1;
+    }
     break;
-  case 28: /* rangemin */
+  case 38: /* rangemin */
     ((specopts_t *)settings->ref)->obsrangemin = atoi(optarg);
     break;
-  case 29: /* rangemax */
+  case 39: /* rangemax */
     ((specopts_t *)settings->ref)->obsrangemax = atoi(optarg);
+    break;
+  case 40: /* drfile */
+    ((specopts_t *)settings->ref)->drfile = optarg;
+    break;
+  case 41: /* drtol */
+    ((specopts_t *)settings->ref)->doublerestol = atof(optarg);
+    break;
+  case 42: /* linkbc */
+    ((specopts_t *)settings->ref)->linkbc = 1;
     break;
   default:
     printf("Aborting: %c\n",c);
@@ -389,16 +413,6 @@ int main(int argc, char *argv[]) {
      * as "%d %d GD %u %u %u" (same as population output file).
      */
     {"popfile",    required_argument, 0, 'P'},
-    /** --drfile FILE
-     *
-     * File containing double resonance data.
-     */
-    {"drfile",     required_argument, 0, 26},
-    /** --drtol TOLERANCE
-     *
-     * Matching tolerance 
-     */
-    {"drtol",      required_argument, 0, 27},
     /** --amin NUMBER
      *
      * Minimum A value (in units compatible with template file).
@@ -429,16 +443,81 @@ int main(int argc, char *argv[]) {
      * Maximum C value (in units compatible with template file).
      */
     {"cmax",       required_argument, 0, 25},
+    /** --djmin NUMBER
+     *
+     * Minimum DJ value (in units compatible with template file).
+     */
+    {"djmin",      required_argument, 0, 26},
+    /** --djmax NUMBER
+     *
+     * Maximum DJ value (in units compatible with template file).
+     */
+    {"djmax",      required_argument, 0, 27},
+    /** --djkmin NUMBER
+     *
+     * Minimum DJK value (in units compatible with template file).
+     */
+    {"djkmin",     required_argument, 0, 28},
+    /** --djkmax NUMBER
+     *
+     * Maximum DJK value (in units compatible with template file).
+     */
+    {"djkmax",     required_argument, 0, 29},
+    /** --dkmin NUMBER
+     *
+     * Minimum DK value (in units compatible with template file).
+     */
+    {"dkmin",      required_argument, 0, 30},
+    /** --dkmax NUMBER
+     *
+     * Maximum DK value (in units compatible with template file).
+     */
+    {"dkmax",      required_argument, 0, 31},
+    /** --deljmin NUMBER
+     *
+     * Minimum delJ value (in units compatible with template file).
+     */
+    {"deljmin",    required_argument, 0, 32},
+    /** --deljmax NUMBER
+     *
+     * Maximum delJ value (in units compatible with template file).
+     */
+    {"deljmax",    required_argument, 0, 33},
+    /** --delkmin NUMBER
+     *
+     * Minimum delK value (in units compatible with template file).
+     */
+    {"delkmin",    required_argument, 0, 34},
+    /** --delkmax NUMBER
+     *
+     * Maximum delK value (in units compatible with template file).
+     */
+    {"delkmax",    required_argument, 0, 35},
     /** --rangemin NUMBER
      *
      * Minimum observation range.
      */
-    {"rangemin",   required_argument, 0, 28},
+    {"rangemin",   required_argument, 0, 38},
     /** --rangemax NUMBER
      *
      * Maximum observation range.
      */
-    {"rangemax",   required_argument, 0, 29},
+    {"rangemax",   required_argument, 0, 39},
+    /** --drfile FILE
+     *
+     * File containing double resonance data.
+     */
+    {"drfile",     required_argument, 0, 40},
+    /** --drtol TOLERANCE
+     *
+     * Matching tolerance 
+     */
+    {"drtol",      required_argument, 0, 41},
+    /** --linkbc NUMBER
+     *
+     * Run algorithm using B+C and B-C instead of B and C.
+     */
+    {"linkbc",   no_argument, 0, 42},
     {0, 0, 0, 0}
   };
   char *optlog = malloc(128);	/* Initial allocation */
@@ -458,7 +537,7 @@ int main(int argc, char *argv[]) {
   specopts.bins = BINS;
   specopts.distanceweight = 1.0;
   for ( i = 0; i < SEGMENTS; i++ )
-    specopts.rangemin[i] = specopts.rangemax[i] = 0;
+    specopts.userange[i] = specopts.rangemin[i] = specopts.rangemax[i] = 0;
   specopts.popfile = NULL;
   specopts.drfile = NULL;
   specopts.doublereslen = 0;
@@ -579,17 +658,26 @@ int main(int argc, char *argv[]) {
     FILE *fh = fopen(specopts.popfile, "r");
     unsigned int idx = 0;
     while ( idx < settings.popsize ) {
-      int rc = fscanf(fh, "%*d %*d GD %u %u %u", &specopts.popdata[idx*SEGMENTS], &specopts.popdata[idx*SEGMENTS+1], &specopts.popdata[idx*SEGMENTS+2]);
-      if ( rc == EOF ) {
+      int rc = fscanf(fh, "%*d %*d GD");
+      if ( rc == 0 ) {
+        for ( i = 0; i < SEGMENTS; i++ ) {
+          rc = fscanf(fh, "%u", &specopts.popdata[idx*SEGMENTS+i]);
+          if ( rc != 1 ) break;
+        }
+      } else rc = 0; /* Pretend to be an error from the inner loop */
+      if ( rc == 0 ) {
         qprintf(&settings, "load popdata failed: EOF at idx=%u\n", idx);
         return 1;
       }
       idx++;
     }
     fclose(fh);
+    /* Display the loaded population (I don't feel like migrating this to
+     * SEGMENT count-independent form (FIXME) */
+    /*
     for ( idx=0;idx<settings.popsize;idx++ ) {
-      printf("001 %03u GD %10u %10u %10u\n", idx, specopts.popdata[idx*SEGMENTS], specopts.popdata[idx*SEGMENTS+1],specopts.popdata[idx*SEGMENTS+2]);
-    }
+      printf("0000 %04u GD %10u %10u %10u\n", idx, specopts.popdata[idx*SEGMENTS], specopts.popdata[idx*SEGMENTS+1],specopts.popdata[idx*SEGMENTS+2]);
+    }*/
   }
   /* Load double resonance */
   if ( specopts.drfile ) {
@@ -716,6 +804,7 @@ int GA_random_segment(GA_session *ga, const unsigned int i,
     unsigned int realr;
     realr = (unsigned)((double)(*r)*(opts->rangemax[j]-opts->rangemin[j])
                        /RAND_MAX)+opts->rangemin[j];
+    printf("%d\n", realr);
     *r = grayencode(realr);
     //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
   }
@@ -725,7 +814,6 @@ int GA_random_segment(GA_session *ga, const unsigned int i,
 int GA_finished_generation(const GA_session *ga, int terminating) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   /* Save best result */
-  int i;
   unsigned int p;
   int rc = 0;
   FILE *fh;
@@ -736,11 +824,12 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
     return 10;
   }
   for ( p = 0; p < ga->settings->popsize; p++ ) {
-    GA_segment x[SEGMENTS];
-    for ( i = 0; i < SEGMENTS; i++ )
-      x[i] = graydecode(ga->population[p].segments[i]);
-    fprintf(fh, "%03u %03u GD %10u %10u %10u\n", ga->generation, p,
-            x[0], x[1], x[2]);
+    GA_segment *x = ga->population[p].gdsegments;
+    int j = 0;
+    fprintf(fh, "%04u %04u GD", ga->generation, p);
+    for ( j = 0; j < SEGMENTS; j++ )
+      fprintf(fh, "  %10u", x[j]);
+    fprintf(fh, "\n");
     if ( p == ga->fittest ) {
       /* Generate SPCAT input file */
       rc = generate_input_files(opts, opts->basename_out, x);
@@ -763,21 +852,27 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
 
 int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
-  GA_segment x[SEGMENTS];
+  GA_segment *x = elem->gdsegments;
   int i = 0;
-  /* WARNING: WE DO THIS TWICE NOW! */
-  for ( i = 0; i < SEGMENTS; i++ ) x[i] = graydecode(elem->segments[i]);
 
-  /* Check basic constraints */
-  if ( x[0] < x[1] || x[1] < x[2] || x[2] <= 0 ) {
-    return 0; // commented out for B+C / B-C
+  /* Check basic constraints: A >= B >= C.
+   * i.e. Fail if A < B or B < C. */
+  {
+    GA_segment b = x[1];
+    GA_segment c = x[2];
+    /* Convert B+C and B-C to B and C */
+    if ( opts->linkbc ) { b = (x[1]+x[2])/2; c = (x[1]-x[2])/2; }
+    if ( x[0] < b || b < c || c <= 0 )
+      return 0;
+    printf("ABC %d >= %d >= %d\n", x[0], b, c);
   }
   /*
   GA_segment ideal[] = {2094967296, 1600000000, 100000000};
   GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
   */
   for ( i = 0; i < SEGMENTS; i++ ) {
-    if ( (x[i] < opts->rangemin[i]) || (x[i] > opts->rangemax[i]) ) {
+    if ( opts->userange[i] &&
+         ( (x[i] < opts->rangemin[i]) || (x[i] > opts->rangemax[i]) ) ) {
       /*
       printf("Rejecting segment %03d %010u < %010u < %010u\n", i,
              opts->rangemin[i],x[i],opts->rangemax[i]);
@@ -800,7 +895,7 @@ int bin_comparator(const void *a, const void *b) {
 int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
-  GA_segment x[SEGMENTS];
+  GA_segment *x = elem->gdsegments;
   int i = 0, j = 0;
   FILE *fh;
   int rc = 0;
@@ -817,8 +912,6 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
 #else
   char filename[128];
 #endif
-  /* WARNING: WE DO THIS TWICE NOW! */
-  for ( i = 0; i < SEGMENTS; i++ ) x[i] = graydecode(elem->segments[i]);
 
 #ifdef USE_SPCAT_OBJ
   /* Generate SPCAT input buffer */

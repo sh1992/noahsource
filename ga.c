@@ -32,6 +32,7 @@ static void *GA_do_thread (void * arg);
 /* Consider abandoning this mutex in favor of flockfile on */
 static pthread_mutex_t iomutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
+static int astrcat(char **s, const char *append);
 
 int GA_defaultsettings(GA_settings *settings) {
     memset(settings, 0, sizeof(GA_settings));
@@ -106,6 +107,8 @@ int GA_init(GA_session *session, GA_settings *settings,
     /* Allocate individual's segments (freed in GA_cleanup) */
     session->population[i].segments = malloc(segmentmallocsize);
     if ( !session->population[i].segments ) return 4;
+    session->population[i].gdsegments = malloc(segmentmallocsize);
+    if ( !session->population[i].gdsegments ) return 4;
     /* Generate initial population */
     do {
       printf("Generating initial pop %03d\n", i);
@@ -115,7 +118,9 @@ int GA_init(GA_session *session, GA_settings *settings,
         if ( random_r(&session->rs, &r) ) perror("random");
         */
         if ( GA_random_segment(session, i, j, &r) ) perror("random");
+        /* Insert new segment, also graydecode it. */
         session->population[i].segments[j] = (GA_segment)r;
+        session->population[i].gdsegments[j] = graydecode((GA_segment)r);
       }
       session->population[i].fitness = 0;
     } while ( !GA_fitness_quick(session, &session->population[i]) );
@@ -125,6 +130,8 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->newpop[i].segmentcount = segmentcount;
     session->newpop[i].segments = malloc(segmentmallocsize);
     if ( !session->newpop[i].segments ) return 5;
+    session->newpop[i].gdsegments = malloc(segmentmallocsize);
+    if ( !session->newpop[i].gdsegments ) return 5;
     /* Insert into sorted list */
     session->sorted[i] = i;
   }
@@ -139,6 +146,7 @@ int GA_init(GA_session *session, GA_settings *settings,
     for ( j = 0; j < 2; j++ ) {
       session->fitnesscache[i][j].segments = malloc(segmentmallocsize);
       if ( !session->fitnesscache[i][j].segments ) return 8;
+      /* Fitness cache does not store graydecoded segments */
     }
   }
   /* Allocate the dynmut buffer (freed in GA_cleanup) */
@@ -207,7 +215,9 @@ int GA_cleanup(GA_session *session) {
   free(session->threads);
   for ( i = 0; i < session->settings->popsize; i++ ) {
     free(session->population[i].segments);
+    free(session->population[i].gdsegments);
     free(session->newpop[i].segments);
+    free(session->newpop[i].gdsegments);
   }
   free(session->population);
   free(session->newpop);
@@ -233,6 +243,7 @@ int GA_evolve(GA_session *session,
       for ( j = 0; j < session->newpop[i].segmentcount; j++ ) {
 	/* Insert new segments */
 	session->newpop[i].segments[j] = session->population[session->sorted[i]].segments[j];
+	session->newpop[i].gdsegments[j] = session->population[session->sorted[i]].gdsegments[j];
       }
     }
     /* Create a new population by roulette wheel.
@@ -286,9 +297,15 @@ int GA_evolve(GA_session *session,
                    (k == 0) ? newa : newb, bitpos, mask); */
 	  }
 	}
-	/* Insert new segments */
+	/* Insert new segments. Graydecode each segment and store the
+	 * result in the graydecode cache. This allows us to graydecode
+	 * each segment only once. */
+
 	session->newpop[i].segments[j] = newa;
+	session->newpop[i].gdsegments[j] = graydecode(newa);
 	session->newpop[i+1].segments[j] = newb;
+	session->newpop[i+1].gdsegments[j] = graydecode(newb);
+	//printf("%d\n", graydecode(newa));
       }
       /* Verify that new population elements are valid */
       if ( GA_fitness_quick(session, &session->newpop[i]) &&
@@ -462,7 +479,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   */
 
   /* Announce caching status for segment use */ 
-  tprintf("FND%1d hash %08x bucket %3d orig %f\n",
+  tprintf("FND%1d hash %08x bucket %4d orig %f\n",
 	  found, hashtemp, hashbucket, session->population[i].fitness);
   /* Save the fitness in the cache */
   if ( ( found == 0 ) || ( found > 1 ) ) {
@@ -563,6 +580,30 @@ static void *GA_do_thread (void * arg) {
   return NULL;
 }
 #endif
+
+static void display_individual(GA_session *session, unsigned int i,
+                               int always, char *type) {
+  unsigned int j;
+  char *str = NULL;
+  int rc = asprintf(&str,
+     "%-4s %04u %04u   GD 000 %10u score %9.7f orig %15.3f",
+     type, session->generation, i, session->population[i].gdsegments[0],
+     session->population[i].fitness, session->population[i].unscaledfitness);
+  if ( rc < 0 ) return;
+  /* Use more lines for additional segments */
+  for ( j = 1; j < session->population[i].segmentcount; j++ ) {
+    char *substr = NULL;
+    rc = asprintf(&substr, "                 GD %03d %10u", j,
+                  session->population[i].gdsegments[j]);
+    if ( rc < 0 ) return;
+    if ( astrcat(&str, substr) ) return; /* failed */
+    free(substr);
+  }
+
+  if ( always ) qprintf(session->settings, "%s\n", str);
+  else printf("%s\n", str);
+  free(str);
+}
 
 int GA_checkfitness(GA_session *session) {
   unsigned int i, j, cfinite;
@@ -700,15 +741,19 @@ int GA_checkfitness(GA_session *session) {
     if ( session->population[i].fitness >
 	 session->population[session->fittest].fitness ) session->fittest = i;
     session->fitnesssum += session->population[i].fitness;
+    display_individual(session, i, 0,
+                       (session->fittest == i) ? "FITM" : "ITEM");
+#if 0
     printf("%-4s %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
 	   (session->fittest == i) ? "FITM" : "ITEM", session->generation, i,
-	   graydecode(session->population[i].segments[0]),
+	   session->population[i].gdsegments[0],
 	   session->population[i].fitness,
 	   session->population[i].unscaledfitness);
     /* Use more lines for additional segments */
     for ( j = 1; j < session->population[i].segmentcount; j++ )
       printf("               GD %03d %10u\n", j,
-	     graydecode(session->population[i].segments[j]));
+	     session->population[i].gdsegments[j]);
+#endif
   }
 
   /* Sort the sorted list. */
@@ -732,16 +777,19 @@ int GA_checkfitness(GA_session *session) {
     }
   }
   /* Display the best individual */
+  display_individual(session, session->fittest, 1, "BEST");
+#if 0
   qprintf(session->settings,
 	  "BEST %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
 	  session->generation, session->fittest,
-	  graydecode(session->population[session->fittest].segments[0]),
+	  session->population[session->fittest].gdsegments[0],
 	  session->population[session->fittest].fitness,
 	  session->population[session->fittest].unscaledfitness);
   /* Use more lines for additional segments */
   for ( j = 1; j < session->population[session->fittest].segmentcount; j++ )
     qprintf(session->settings, "               GD %03d %10u\n", j,
-	    graydecode(session->population[session->fittest].segments[j]));
+	    session->population[session->fittest].gdsegments[j]);
+#endif
   printf("\n");
   return 0;
 }

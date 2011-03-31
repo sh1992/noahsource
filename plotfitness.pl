@@ -7,7 +7,7 @@
 die "Usage: $0 <files>\n" unless @ARGV;
 foreach $fn ( @ARGV ) {
     if ( $fn =~ m/\.bz2$/ )
-        { open F, '-|', 'bzip2', '-d', $fn or die "bzip2 -d $fn: $!" }
+        { open F, '-|', 'bzip2', '-dc', $fn or die "bzip2 -d $fn: $!" }
     else { open F, '<', $fn or die "$fn: $!" }
     my @gens = ();
     my $hasdynmut = 0;

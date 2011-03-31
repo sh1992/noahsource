@@ -28,6 +28,8 @@ typedef struct GA_individual_struct {
    * a portion of the individual's genome.
    */
   GA_segment *segments;
+  /** Graydecoded segments. */
+  GA_segment *gdsegments;
   /** The number of segments in the individual. */
   unsigned int segmentcount;
   /** The fitness of the individual. \see GA_fitness, GA_checkfitness */
