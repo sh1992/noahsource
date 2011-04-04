@@ -33,7 +33,19 @@ foreach $fn ( @ARGV ) {
     $ytop++;
 
     $outfn = $fn;
-    die "Invalid filename format: $fn\n" unless $outfn =~ s/\.log(\.crushed)?$/-fitness.png/;
+    die "Invalid filename format: $fn\n" unless $outfn =~ s/\.log(\.crushed|\.bz2)*$/-fitness.png/;
+    $datfn = $outfn;
+    die "Invalid filename format: $fn\n" unless $datfn =~ s/\.png$/.dat/;
+    open DAT, '>', $datfn;
+    my @keys = qw/gen avg best/, $hasdynmut ? qw/leading trailing mutationrate/: ();
+    print DAT '# ', join(' ', @keys),"\n";
+    foreach ( @gens ) {
+        foreach my $key ( @keys ) {
+            print DAT "$_->{$key} ";
+        }
+        print DAT "\n";
+    }
+    close DAT;
 
     open G, '|-', 'gnuplot';
     print G <<END;
