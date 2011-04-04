@@ -104,13 +104,13 @@ typedef struct GA_thread_struct {
 /** The state of the entire session.
  */
 typedef struct GA_session_struct {
-  /** The population array for the current generation. \see newpop */
+  /** The population array for the current generation. \see oldpop */
   GA_individual *population;
   /** The population array for the next generation. After the next
-   * generation is completed, the population and newpop pointers are
+   * generation is completed, the population and oldpop pointers are
    * swapped. \see population
    */
-  GA_individual *newpop;
+  GA_individual *oldpop;
   /** Fitness cache, to avoid unneccessary fitness evaluations. */
   GA_individual **fitnesscache;
   /** A list of indexes into the population, sorted by fitness. The
@@ -214,10 +214,19 @@ int GA_cleanup(GA_session *session);
  *
  * \returns 0 to indicate success, 1 if any fitness function failed.
  */
-int GA_evolve(GA_session *session,
-	      unsigned int generations);
+int GA_evolve(GA_session *session, unsigned int generations);
 
-/** Choose an element of the population using the roulette algorithm.
+/** Generate individuals into the population starting from index i.
+ *
+ * Used to generate initial population of each generation (skipping elitism)
+ * and for replacing rejected members of the population (skipping valid ones).
+ *
+ * \param session     A previously intialized GA_session object.
+ * \param i           The index to start from.
+ */
+void GA_generate(GA_session *session, unsigned int i);
+
+/** Choose an element of the oldpop using the roulette algorithm.
  *
  * \param session     A previously intialized GA_session object.
  *

@@ -95,20 +95,29 @@ int GA_init(GA_session *session, GA_settings *settings,
   /* Allocate the population array (freed in GA_cleanup) */
   session->population = malloc(sizeof(GA_individual)*settings->popsize);
   if ( !session->population ) return 1;
-  session->newpop     = malloc(sizeof(GA_individual)*settings->popsize);
-  if ( !session->newpop     ) return 2;
+  session->oldpop     = malloc(sizeof(GA_individual)*settings->popsize);
+  if ( !session->oldpop     ) return 2;
   /* Allocate and fill the sorted list (freed in GA_cleanup) */
   session->sorted     = malloc(sizeof(unsigned int)*settings->popsize);
   if ( !session->sorted     ) return 3;
   /* Initialize each individual */
   for ( i = 0; i < settings->popsize; i++ ) {
+    /* Allocate individual's segments (freed in GA_cleanup) */
     memset(&(session->population[i]), 0, sizeof(GA_individual));
     session->population[i].segmentcount = segmentcount;
-    /* Allocate individual's segments (freed in GA_cleanup) */
     session->population[i].segments = malloc(segmentmallocsize);
     if ( !session->population[i].segments ) return 4;
     session->population[i].gdsegments = malloc(segmentmallocsize);
     if ( !session->population[i].gdsegments ) return 4;
+
+    /* Allocate oldpop element */
+    memset(&(session->oldpop[i]), 0, sizeof(GA_individual));
+    session->oldpop[i].segmentcount = segmentcount;
+    session->oldpop[i].segments = malloc(segmentmallocsize);
+    if ( !session->oldpop[i].segments ) return 5;
+    session->oldpop[i].gdsegments = malloc(segmentmallocsize);
+    if ( !session->oldpop[i].gdsegments ) return 5;
+
     /* Generate initial population */
     do {
       printf("Generating initial pop %03d\n", i);
@@ -124,14 +133,6 @@ int GA_init(GA_session *session, GA_settings *settings,
       }
       session->population[i].fitness = 0;
     } while ( !GA_fitness_quick(session, &session->population[i]) );
-
-    /* Allocate newpop element */
-    memset(&(session->newpop[i]), 0, sizeof(GA_individual));
-    session->newpop[i].segmentcount = segmentcount;
-    session->newpop[i].segments = malloc(segmentmallocsize);
-    if ( !session->newpop[i].segments ) return 5;
-    session->newpop[i].gdsegments = malloc(segmentmallocsize);
-    if ( !session->newpop[i].gdsegments ) return 5;
     /* Insert into sorted list */
     session->sorted[i] = i;
   }
@@ -216,11 +217,11 @@ int GA_cleanup(GA_session *session) {
   for ( i = 0; i < session->settings->popsize; i++ ) {
     free(session->population[i].segments);
     free(session->population[i].gdsegments);
-    free(session->newpop[i].segments);
-    free(session->newpop[i].gdsegments);
+    free(session->oldpop[i].segments);
+    free(session->oldpop[i].gdsegments);
   }
   free(session->population);
-  free(session->newpop);
+  free(session->oldpop);
   free(session->sorted);
   for ( i = 0; i < session->cachesize; i++ ) {
     for ( j = 0; j < 2; j++ ) free(session->fitnesscache[i][j].segments);
@@ -231,97 +232,31 @@ int GA_cleanup(GA_session *session) {
   return 0;
 }
 
-int GA_evolve(GA_session *session,
-	      unsigned int generations) {
+int GA_evolve(GA_session *session, unsigned int generations) {
   if ( generations == 0 ) generations = session->settings->generations;
   unsigned int gen;
   for ( gen = 0; gen < generations; gen++ ) {
-    unsigned int i, ntimes = 0;
+    unsigned int i;
+
+    /* Swap population into oldpop */
+    GA_individual *temp = session->population;
+    session->population = session->oldpop;
+    session->oldpop = temp;
+
     /* Keep top 8 members of the old population. */
     for ( i = 0; i < session->settings->elitism; i++ ) {
       unsigned int j;
-      for ( j = 0; j < session->newpop[i].segmentcount; j++ ) {
+      for ( j = 0; j < session->population[i].segmentcount; j++ ) {
 	/* Insert new segments */
-	session->newpop[i].segments[j] = session->population[session->sorted[i]].segments[j];
-	session->newpop[i].gdsegments[j] = session->population[session->sorted[i]].gdsegments[j];
+	session->population[i].segments[j] = session->oldpop[session->sorted[i]].segments[j];
+	session->population[i].gdsegments[j] = session->oldpop[session->sorted[i]].gdsegments[j];
       }
     }
     /* Create a new population by roulette wheel.
        (Consider: Top half roulette wheel/Keep top 8?) */
-    for ( ; i < session->settings->popsize; /* See bottom of loop */ ) {
-      unsigned int a = GA_roulette(session);
-      unsigned int b = GA_roulette(session);
-      GA_segment olda, oldb;
-      GA_segment newa, newb;
-      unsigned int j;
-      for ( j = 0; j < session->newpop[i].segmentcount; j++ ) {
-	int afirst;
-	int bitpos;
-	GA_segment mask;
-	if ( random_r(&session->rs, &afirst) ) perror("random");
-	if ( random_r(&session->rs, &bitpos) ) perror("random");
-	afirst = afirst%2;
-	bitpos = bitpos%GA_segment_size;
-	mask = (1<<bitpos)-1;
-	/* Crossover. Random split & recombine. */
-	olda = session->population[afirst ? a : b].segments[j];
-	oldb = session->population[afirst ? b : a].segments[j];
-	newa = (olda & (~mask)) | (oldb & mask);
-	newb = (oldb & (~mask)) | (olda & mask);
+    GA_generate(session, i);
 
-	/*
-	  printf("\nNITM %03d %03d %03d %03d\n",
-	      session->generation+1, i, i+1, j);
-	*/
-	/*
-	printf("XOVR %08x %3d %08x %3d to %08x %08x mask %2d %08x %08x\n",
-	       olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
-	*/
-
-	/* Mutation. Low-probability bitflip. */
-	for ( bitpos = 0; bitpos < GA_segment_size; bitpos++ ) {
-	  unsigned int k;
-	  mask = 1<<bitpos;
-	  for ( k = 0; k < 2; k++ ) { /* Outer loop is pairwise */
-	    double threshold = session->settings->mutationrate *
-	      powf((double)(GA_segment_size-bitpos)/GA_segment_size,
-	           session->settings->mutationweight);
-	    /* Mutation probability */
-            if ( random_r(&session->rs, &afirst) ) perror("random");
-            if ( !( (double)afirst/RAND_MAX < threshold ) ) continue;
-            /* printf("FLIP %08x     ", (k == 0) ? newa : newb); */
-            if ( k == 0 ) newa ^= mask;
-            else newb ^= mask;
-            /*
-            printf("to %08x mask %2d %08x\n",
-                   (k == 0) ? newa : newb, bitpos, mask); */
-	  }
-	}
-	/* Insert new segments. Graydecode each segment and store the
-	 * result in the graydecode cache. This allows us to graydecode
-	 * each segment only once. */
-
-	session->newpop[i].segments[j] = newa;
-	session->newpop[i].gdsegments[j] = graydecode(newa);
-	session->newpop[i+1].segments[j] = newb;
-	session->newpop[i+1].gdsegments[j] = graydecode(newb);
-	//printf("%d\n", graydecode(newa));
-      }
-      /* Verify that new population elements are valid */
-      if ( GA_fitness_quick(session, &session->newpop[i]) &&
-           GA_fitness_quick(session, &session->newpop[i+1]) ) {
-        /* Continue to next loop iteration */
-        i += 2;
-        printf("REGENERATED %d\n", ntimes);
-        ntimes = 0;
-      }
-      else ntimes++;
-    }
-
-    /* Swap newpop into population */
-    GA_individual *temp = session->population;
-    session->population = session->newpop;
-    session->newpop = temp;
+    /* Bump generation */
     session->generation++;
     /* Check termination condition. */
     printf("BKTS %03d ", session->generation);
@@ -342,6 +277,99 @@ int GA_evolve(GA_session *session,
   return 0;
 }
 
+void GA_generate(GA_session *session, unsigned int i) {
+  unsigned int ntimes = 0;
+  for ( ; i < session->settings->popsize; /* See bottom of loop */ ) {
+    unsigned int a, b, j;
+    /* Special case first generation */
+    if ( session->generation == 0 ) {
+      do {
+        for ( j = 0; j < session->population[i].segmentcount; j++ ) {
+          int r;
+          /*
+          if ( random_r(&session->rs, &r) ) perror("random");
+          */
+          if ( GA_random_segment(session, i, j, &r) ) perror("random");
+          /* Insert new segment, also graydecode it. */
+          session->population[i].segments[j] = (GA_segment)r;
+          session->population[i].gdsegments[j] = graydecode((GA_segment)r);
+        }
+        session->population[i].fitness = 0;
+      } while ( !GA_fitness_quick(session, &session->population[i]) );
+      i++;
+      continue;
+    }
+    /* Proceed in general */
+    a = GA_roulette(session);
+    b = GA_roulette(session);
+    for ( j = 0; j < session->population[i].segmentcount; j++ ) {
+      int afirst;
+      int bitpos;
+      GA_segment olda, oldb;
+      GA_segment newa, newb;
+      GA_segment mask;
+      if ( random_r(&session->rs, &afirst) ) perror("random");
+      if ( random_r(&session->rs, &bitpos) ) perror("random");
+      afirst = afirst%2;
+      bitpos = bitpos%GA_segment_size;
+      mask = (1<<bitpos)-1;
+      /* Crossover. Random split & recombine. */
+      olda = session->oldpop[afirst ? a : b].segments[j];
+      oldb = session->oldpop[afirst ? b : a].segments[j];
+      newa = (olda & (~mask)) | (oldb & mask);
+      newb = (oldb & (~mask)) | (olda & mask);
+
+      /*
+      printf("\nNITM %03d %03d %03d %03d\n",
+             session->generation+1, i, i+1, j);
+      printf("XOVR %08x %3d %08x %3d to %08x %08x mask %2d %08x %08x\n",
+             olda,a, oldb,b, newa, newb, bitpos, ~mask, mask);
+      */
+
+      /* Mutation. Low-probability bitflip. */
+      for ( bitpos = 0; bitpos < GA_segment_size; bitpos++ ) {
+        unsigned int k;
+        mask = 1<<bitpos;
+        for ( k = 0; k < 2; k++ ) { /* Outer loop is pairwise */
+          double threshold = session->settings->mutationrate *
+            powf((double)(GA_segment_size-bitpos)/GA_segment_size,
+                 session->settings->mutationweight);
+          /* Mutation probability */
+          if ( random_r(&session->rs, &afirst) ) perror("random");
+          if ( !( (double)afirst/RAND_MAX < threshold ) ) continue;
+          /* printf("FLIP %08x     ", (k == 0) ? newa : newb); */
+          if ( k == 0 ) newa ^= mask;
+          else newb ^= mask;
+          /*
+          printf("to %08x mask %2d %08x\n",
+                 (k == 0) ? newa : newb, bitpos, mask); */
+        }
+      }
+      /* Insert new segments. Graydecode each segment and store the
+       * result in the graydecode cache. This allows us to graydecode
+       * each segment only once. */
+
+      session->population[i].segments[j] = newa;
+      session->population[i].gdsegments[j] = graydecode(newa);
+      if ( i+1 < session->settings->popsize ) {
+        session->population[i+1].segments[j] = newb;
+        session->population[i+1].gdsegments[j] = graydecode(newb);
+        //printf("%d\n", graydecode(newa));
+      }
+    }
+    /* Verify that new population elements are valid */
+    if ( GA_fitness_quick(session, &session->population[i]) &&
+         ( i+1 >= session->settings->popsize ||
+           GA_fitness_quick(session, &session->population[i+1]) ) ) {
+      /* Continue to next loop iteration */
+      printf("REGENERATED %04d %04d %3d\n", i, i+1, ntimes);
+      i += 2;
+      ntimes = 0;
+    }
+    else ntimes++;
+  }
+}
+
 unsigned int GA_roulette(GA_session *session) {
   double index;
   unsigned int i;
@@ -357,7 +385,7 @@ unsigned int GA_roulette(GA_session *session) {
   /* printf("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
   for ( i = 0; i < session->settings->popsize; i++ ) {
     double score = (session->fitnesssum <= 0) ? uniformroulette :
-      (1.0*session->population[i].fitness/session->fitnesssum);
+      (1.0*session->oldpop[i].fitness/session->fitnesssum);
     if ( index < score ) {
       /* printf("roulette %7.5f < %7.5f %u\n", index, score, i); */
       return i;
@@ -440,14 +468,14 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   }
 #endif
 
-  /* Also check the old population (ironically stored in newpop).  No
-   * lock necessary, newpop only modified in GA_evolve */
+  /* Also check the old population.  No lock necessary,
+   * oldpop only modified in GA_evolve */
   if ( !found && session->generation > 0 ) {
     for ( j = 0; j < session->settings->popsize; j++ ) {
       if ( !memcmp(session->population[i].segments,
-		   session->newpop[j].segments,
+		   session->oldpop[j].segments,
 		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
-	session->population[i].fitness = session->newpop[j].unscaledfitness;
+	session->population[i].fitness = session->oldpop[j].unscaledfitness;
 	found = 6;
 	break;
       }
@@ -627,79 +655,108 @@ int GA_checkfitness(GA_session *session) {
       max = session->population[i].fitness;
   }
 #else
-#if THREADS
-  /* Initiate dispatch among worker threads */
-  rc = pthread_mutex_lock(&(session->inmutex));
-  if ( rc ) { qprintf(session->settings,
-		      "GA_checkfitness: mutex_lock(in): %d\n", rc); exit(1); }
-  session->inindex = 0;
-  session->inflag = 1;
-  rc = pthread_mutex_unlock(&(session->inmutex));
-  if ( rc )
-    { qprintf(session->settings,
-	      "GA_checkfitness: mutex_unlock(in): %d\n", rc); exit(1); }
-  rc = pthread_cond_signal(&(session->incond));
-  if ( rc ) { qprintf(session->settings,
-		      "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
-#endif
-  j = 0; i = 0; cfinite = 0;
-  while ( j < session->settings->popsize ) {
-    int found;
-#if THREADS
-    /* Check the worker thread output buffer. */
-    rc = pthread_mutex_lock(&(session->outmutex));
-    if ( rc )
-      { qprintf(session->settings,
-		"GA_checkfitness: mutex_lock(out): %d\n", rc); exit(1); }
-    /* Wait until the job-completed flag is set. */
-    while ( !session->outflag ) {
-      /* printf("Waiting for reply...\n"); */
-      rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
-      if ( rc )
-	{ qprintf(session->settings,
-		  "GA_checkfitness: cond_wait(out): %d\n", rc); exit(1); }
-      /* printf("Waking up\n"); */
+  cfinite = 0; /* Number of individuals with finite fitness */
+  /* Continue until we have a full population */
+  while ( cfinite < session->settings->popsize ) {
+    /* If repeating, move all infinites to the end */
+    if ( cfinite > 0 ) {
+      j = session->settings->popsize;
+      for ( i = 0; i < j; i++ ) {
+        GA_individual temp = session->population[i];
+        if ( !isnan(temp.fitness) ) continue;
+        /* Move us to the end. */
+        do {
+          j--;
+        } while ( isnan(session->population[j].fitness) && j > i );
+        if ( j <= i ) break; /* We've overshot */
+        session->population[i] = session->population[j];
+        session->population[j] = temp;
+      }
+      /* Check that this startat / cfinite is correct */
+      if ( j != cfinite || i != cfinite ) {
+        qprintf(session->settings, "GA_checkfitness: nan migration failed: %d, %d, %d\n", i, j, cfinite);
+        exit(1);
+      }
+      qprintf(session->settings, "Still only %d valid individuals...\n", i);
+      /* Generate new individuals */
+      GA_generate(session, i);
     }
-    /* printf("outflag! \n"); */
-    i = session->outindex;
-    found = session->outretval;
-    session->outflag = 0;
-    /* Unlock output buffer */
-    rc = pthread_mutex_unlock(&(session->outmutex));
+#if THREADS
+    /* Initiate dispatch among worker threads */
+    rc = pthread_mutex_lock(&(session->inmutex));
+    if ( rc ) { qprintf(session->settings,
+		        "GA_checkfitness: mutex_lock(in): %d\n", rc); exit(1); }
+    session->inindex = cfinite;
+    session->inflag = 1;
+    rc = pthread_mutex_unlock(&(session->inmutex));
     if ( rc )
       { qprintf(session->settings,
-		"GA_checkfitness: mutex_unlock(out): %d\n", rc); exit(1); }
-    rc = pthread_cond_broadcast(&(session->outcond));
-    if ( rc )
-      { qprintf(session->settings,
-		"GA_checkfitness: cond_broadcast(out): %d\n", rc); exit(1); }
+	        "GA_checkfitness: mutex_unlock(in): %d\n", rc); exit(1); }
+    rc = pthread_cond_signal(&(session->incond));
+    if ( rc ) { qprintf(session->settings,
+		        "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
+#endif
+    j = cfinite; i = 0;
+    while ( j < session->settings->popsize ) {
+      int found;
+#if THREADS
+      /* Check the worker thread output buffer. */
+      rc = pthread_mutex_lock(&(session->outmutex));
+      if ( rc )
+        { qprintf(session->settings,
+		  "GA_checkfitness: mutex_lock(out): %d\n", rc); exit(1); }
+      /* Wait until the job-completed flag is set. */
+      while ( !session->outflag ) {
+        /* printf("Waiting for reply...\n"); */
+        rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
+        if ( rc )
+	  { qprintf(session->settings,
+		    "GA_checkfitness: cond_wait(out): %d\n", rc); exit(1); }
+        /* printf("Waking up\n"); */
+      }
+      /* printf("outflag! \n"); */
+      i = session->outindex;
+      found = session->outretval;
+      session->outflag = 0;
+      /* Unlock output buffer */
+      rc = pthread_mutex_unlock(&(session->outmutex));
+      if ( rc )
+        { qprintf(session->settings,
+		  "GA_checkfitness: mutex_unlock(out): %d\n", rc); exit(1); }
+      rc = pthread_cond_broadcast(&(session->outcond));
+      if ( rc )
+        { qprintf(session->settings,
+		  "GA_checkfitness: cond_broadcast(out): %d\n", rc); exit(1); }
 #else
-    /* Non-threaded: Just do this fitness evaluation */
-    i = j; rc = 0;
-    found = GA_do_checkfitness(&(session->threads[0]), i);
+      /* Non-threaded: Just do this fitness evaluation */
+      i = j; rc = 0;
+      found = GA_do_checkfitness(&(session->threads[0]), i);
 #endif
 
-    if ( found > 50 ) return found; /* Error */
-    if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
+      if ( found > 50 ) return found; /* Error */
+      if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
 
-    printf("Got %d %d.\n", j, i);
+      printf("Got %d %d.\n", j, i);
 
-    /* Track minimum and maximum fitnesses */
-    j++;
-    if ( isnan(session->population[i].fitness) ) continue; /* Killed item */
+      /* Track minimum and maximum fitnesses */
+      j++;
+      if ( isnan(session->population[i].fitness) ) continue; /* Killed item */
 
-    /* session->fitnesssum += session->population[i].fitness; */
-    if ( cfinite == 0 || session->population[i].fitness < min )
-      min = session->population[i].fitness;
-    if ( cfinite == 0 || session->population[i].fitness > max )
-      max = session->population[i].fitness;
-    mean += session->population[i].fitness;
-    cfinite++;
+      /* session->fitnesssum += session->population[i].fitness; */
+      if ( cfinite == 0 || session->population[i].fitness < min )
+        min = session->population[i].fitness;
+      if ( cfinite == 0 || session->population[i].fitness > max )
+        max = session->population[i].fitness;
+      mean += session->population[i].fitness;
+      cfinite++;
+    }
   }
 #endif	/* unless 0 */
   printf("cfinite=%u vs %u\n", cfinite, session->settings->popsize);
   mean = mean/(cfinite ? cfinite : 1);/* session->settings->popsize; */
-  if ( session->settings->dynmut ) { /* Dynamic Mutation */
+
+  /* Dynamic Mutation */
+  if ( session->settings->dynmut ) {
     double a, b = session->dynmut_trailing[session->dynmut_trailing_pos], d;
     session->dynmut_leading = session->dynmut_leading*
       (session->settings->dynmut_factor-1.0)/session->settings->dynmut_factor

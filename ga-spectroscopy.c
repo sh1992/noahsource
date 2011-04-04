@@ -865,7 +865,7 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
     if ( opts->linkbc ) { b = (x[1]+x[2])/2; c = (x[1]-x[2])/2; }
     if ( x[0] < b || b < c || c <= 0 )
       return 0;
-    printf("ABC %d >= %d >= %d\n", x[0], b, c);
+    //printf("ABC %d >= %d >= %d\n", x[0], b, c);
   }
   /*
   GA_segment ideal[] = {2094967296, 1600000000, 100000000};
