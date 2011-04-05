@@ -541,6 +541,7 @@ int main(int argc, char *argv[]) {
       specopts.rangemax[i] = 0;
   specopts.popfile = NULL;
   specopts.drfile = NULL;
+  specopts.doubleres = NULL;
   specopts.doublereslen = 0;
   specopts.doublerestol = 2;
   specopts.obsrangemin = RANGEMIN;
