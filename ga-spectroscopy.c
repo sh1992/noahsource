@@ -179,7 +179,7 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
     //if ( fh ) i = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
     // 30310 3 7      10 3 8
     // 303231013      231014
-    if ( fh ) i = fscanf(fh, "%g %*g %g %*d %*g %*g %*s%1024[^\r\n]",
+    if ( fh ) i = fscanf(fh, "%g %*g %g %1024[^\r\n]",
                          &a, &b, trailing);
     else break; // Empty memfile wasn't opened
     if ( i == EOF && ferror(fh) ) {
@@ -212,8 +212,8 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
     for ( i = 0; i < 2; i++ ) {
       for ( j = 0; j < 3; j++ ) {
         char str[3]; int val;
-        str[0] = trailing[4+12*i+j*2];
-        str[1] = trailing[4+12*i+j*2+1];
+        str[0] = trailing[25+12*i+j*2];
+        str[1] = trailing[25+12*i+j*2+1];
         str[2] = 0;
         val = parseqn(str);
         //printf("'%s'\n",trailing);
