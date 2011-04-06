@@ -525,6 +525,7 @@ int main(int argc, char *argv[]) {
   int i;
 
   if ( !optlog ) { printf("Out of memory (optlog)\n"); exit(1); }
+  optlog[0] = 0;
   GA_defaultsettings(&settings);
   settings.debugmode = 0;	/* Use non-verbose output */
   settings.popsize = 64;
@@ -544,6 +545,7 @@ int main(int argc, char *argv[]) {
   specopts.doubleres = NULL;
   specopts.doublereslen = 0;
   specopts.doublerestol = 2;
+  specopts.linkbc = 0;
   specopts.obsrangemin = RANGEMIN;
   specopts.obsrangemax = RANGEMAX;
   GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:P:", my_long_options, my_parseopt,
@@ -806,7 +808,7 @@ int GA_random_segment(GA_session *ga, const unsigned int i,
     unsigned int realr;
     realr = (unsigned)((double)(*r)*(opts->rangemax[j]-opts->rangemin[j])
                        /RAND_MAX)+opts->rangemin[j];
-    printf("%d\n", realr);
+    //printf("%d\n", realr);
     *r = grayencode(realr);
     //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
   }
@@ -943,7 +945,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
    * evaluation. This doesn't quite work as expected -- ^C often
    * fails if we use the recommended signal handling code. */
   snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
-  tprintf("Running %s %s\n", opts->spcatbin, filename);
+  //tprintf("Running %s %s\n", opts->spcatbin, filename);
   i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
 
   if ( i != 0 ) return 11;		/* Failed */
@@ -965,7 +967,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   fclose(fh);
 
   /* Determine fitness */
-  tprintf("COUNTS: %d %d\n", opts->observationcount, thrs->compdatacount);
+  //tprintf("COUNTS: %d %d\n", opts->observationcount, thrs->compdatacount);
   fitness = 0;
 
   /* Check double resonance */

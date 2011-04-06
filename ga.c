@@ -120,7 +120,7 @@ int GA_init(GA_session *session, GA_settings *settings,
 
     /* Generate initial population */
     do {
-      printf("Generating initial pop %03d\n", i);
+      //printf("Generating initial pop %03d\n", i);
       for ( j = 0; j < segmentcount; j++ ) {
         int r;
         /*
@@ -199,6 +199,7 @@ int GA_init(GA_session *session, GA_settings *settings,
     if ( rc != 0 ) return 55;
   }
   /* Evaluate final fitness for each individual */
+  session->generation = 0;
   if ( GA_checkfitness(session) != 0 ) return 90;
   /* Return success */
   return 0;
@@ -258,15 +259,17 @@ int GA_evolve(GA_session *session, unsigned int generations) {
 
     /* Bump generation */
     session->generation++;
-    /* Check termination condition. */
+    /* Display cache buckets */
+    /*
     printf("BKTS %03d ", session->generation);
     for ( i = 0; i < session->cachesize; i++ ) {
       printf("%c", session->fitnesscache[i][0].unscaledfitness ? '#' : '.');
       if ( i%64 == 63 ) printf("\n         ");
     }
-    /* printf("\n"); */
-
     printf("\n");
+    */
+
+    /* Check termination condition. */
     if ( GA_checkfitness(session) != 0 ) return 1;
     // Save output on each generation
     int rc = GA_termination(session);
@@ -362,7 +365,7 @@ void GA_generate(GA_session *session, unsigned int i) {
          ( i+1 >= session->settings->popsize ||
            GA_fitness_quick(session, &session->population[i+1]) ) ) {
       /* Continue to next loop iteration */
-      printf("REGENERATED %04d %04d %3d\n", i, i+1, ntimes);
+      //printf("REGENERATED %04d %04d %3d\n", i, i+1, ntimes);
       i += 2;
       ntimes = 0;
     }
@@ -506,9 +509,11 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   }
   */
 
-  /* Announce caching status for segment use */ 
+  /* Announce caching status for segment use */
+  /*
   tprintf("FND%1d hash %08x bucket %4d orig %f\n",
 	  found, hashtemp, hashbucket, session->population[i].fitness);
+  */
   /* Save the fitness in the cache */
   if ( ( found == 0 ) || ( found > 1 ) ) {
     GA_segment *ptr;
@@ -636,7 +641,7 @@ static void display_individual(GA_session *session, unsigned int i,
 int GA_checkfitness(GA_session *session) {
   unsigned int i, j, cfinite;
   int rc;
-  double min, max, mean;
+  double min, max, mean = 0;
   double offset, scale, scalelen;
   int scaleidx;
   unsigned int fevs = 0;
@@ -1458,7 +1463,7 @@ int invisible_system(int stdoutfd, int argc, ...) {
     }
   }
   gettimeofday(&endtime, NULL);
-  printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
+  //printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
   /*
   sigaction(SIGINT, &savintr, (struct sigaction *)0);
   sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
