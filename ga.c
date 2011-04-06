@@ -899,7 +899,10 @@ static int astrcat(char **s, const char *append) {
   size_t newsiz;
   /* String from previous run.  Compared to *s to see if we are
    * dealing with the same string.  If so, we can use offset. */
-  static const char *oldstr = NULL;
+
+  /* nandhp: This doesn't work if a new string is allocated at the same
+   * address as the previous one. This causes display problems. FIXME */
+  /*static*/ const char *oldstr = NULL;
   char *newstr;
 
   /* First string is NULL, so just copy append. */
