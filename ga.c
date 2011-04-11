@@ -1402,10 +1402,16 @@ int invisible_system(int stdoutfd, int argc, ...) {
   char **argv;
   int i;
   /* FIXME - Debug only */
-  struct timeval starttime, endtime;
-  if ( argc <= 0 ) return 1;
+  //struct timeval starttime, endtime;
+  if ( argc <= 0 ) {
+    printf("invisible_system: argc <= 0\n");
+    return 1;
+  }
   argv = malloc(sizeof(char*)*(argc+1));
-  if ( !argv ) return 1;
+  if ( !argv ) {
+    printf("invisible_system: argv malloc failed\n");
+    return 1;
+  }
   va_start(ap, argc);
   for ( i = 0; i < argc; i++ ) {
     argv[i] = va_arg(ap, char *);
@@ -1431,7 +1437,7 @@ int invisible_system(int stdoutfd, int argc, ...) {
 #endif
   flockfile(stdout);
   fflush(NULL);
-  gettimeofday(&starttime, NULL);/* To compute runtime */
+  //gettimeofday(&starttime, NULL);/* To compute runtime */
   if ((pid = fork()) == 0) {
     /*
     sigaction(SIGINT, &savintr, (struct sigaction *)0);
@@ -1456,16 +1462,18 @@ int invisible_system(int stdoutfd, int argc, ...) {
   free(argv);
 
   if (pid == -1) {
+    printf("invisible_system: fork failed, errno=%d\n", errno);
     stat = -1; /* errno comes from fork() */
   } else {
     while (waitpid(pid, &stat, 0) == -1) {
       if (errno != EINTR){
 	stat = -1;
+	printf("invisible_system: waitpid fail, errno=%d\n", errno);
 	break;
       }
     }
   }
-  gettimeofday(&endtime, NULL);
+  //gettimeofday(&endtime, NULL);
   //printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
   /*
   sigaction(SIGINT, &savintr, (struct sigaction *)0);
