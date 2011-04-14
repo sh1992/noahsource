@@ -47,8 +47,10 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->dynmut = 0;
     settings->dynmut_width = 50;
     settings->dynmut_factor = 10;
-    settings->dynmut_min = 0.005;
-    settings->dynmut_range = 0.5; /* Derived from notamol-20100715a runs */
+    settings->dynmut_min = 0.0005;
+    settings->dynmut_range = 0.05;
+    /* Derived from notamol-20100715a runs, updated 20110414 due to new
+     * mutationrate format. */
     settings->ref = NULL;
 #ifdef THREADS
     settings->threadcount = 2;
@@ -761,7 +763,6 @@ int GA_checkfitness(GA_session *session) {
     }
   }
 #endif	/* unless 0 */
-  printf("cfinite=%u vs %u\n", cfinite, session->settings->popsize);
   mean = mean/(cfinite ? cfinite : 1);/* session->settings->popsize; */
 
   /* Dynamic Mutation */
