@@ -61,8 +61,13 @@ typedef struct GA_settings_struct {
    * GA_segment_size, B is the bit position, and W is the mutation weight.
    */
   double mutationweight;
-  /** Elitism count. If odd, round down to next even number. */
+  /** Elitism count. If odd, round down to next even number.
+   *
+   * If specified manually, elitismset MUST also be set to a true value,
+   * or else it will be replaced with the default value. */
   unsigned int elitism;
+  /** Default elitism is sqrt(popsize) unless manually set. */
+  int elitismset;
   /** Use dynamic mutation. */
   unsigned int dynmut;
   /** Dynamic mutation, width for consideration of change in fitness */

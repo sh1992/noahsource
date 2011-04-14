@@ -42,7 +42,8 @@ int GA_defaultsettings(GA_settings *settings) {
     settings->generations = 100;
     settings->mutationrate = 0.015625; /* Expecting 1/2 in 32 bits flipped */
     settings->mutationweight = 0;
-    settings->elitism = 8;
+    settings->elitism = 8; /* sqrt(64)=8 */
+    settings->elitismset = 0;
     settings->dynmut = 0;
     settings->dynmut_width = 50;
     settings->dynmut_factor = 10;
@@ -65,6 +66,9 @@ int GA_init(GA_session *session, GA_settings *settings,
 	    unsigned int segmentcount) {
   unsigned int i, j, rc;
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
+
+  if ( !settings->elitismset ) /* Default to sqrt(popsize) */
+    settings->elitism = (unsigned)sqrt(settings->popsize);
 
   /* Enforce even numbers by rounding (down) to next even number */
   if ( settings->elitism % 2 ) {
@@ -1031,6 +1035,7 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
      break;
    case 'E':
      settings->elitism = atoi(optarg);
+     settings->elitismset = 1;
      break;
    case 'M':
      settings->mutationrate = atof(optarg);
