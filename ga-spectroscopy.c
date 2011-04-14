@@ -56,6 +56,8 @@ typedef struct {
 #ifndef USE_SPCAT_OBJ
   char *basename_temp;		/* Basename of temporary file */
 #endif
+  dblres_check *drlist;
+  int drsize;
 } specthreadopts_t;
 /** Settings */
 typedef struct {
@@ -784,6 +786,7 @@ int main(int argc, char *argv[]) {
   }
   free(specopts.basename_out);
   free(specopts.observation);
+  free(specopts.doubleres);
   rc = 0;
   /* TODO: Free memory */
   /* Remove temporary files */
@@ -976,7 +979,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
    * -- they don't need to to all be the same. */
   /* Isn't that fixed ? */
   
-  dblres_check *drlist = NULL; int drsize = 0; int drfail = 0;
+  int drfail = 0;
   for ( i = 0; i < opts->doublereslen; i++ ) { /* For each resonance */
     int drlen = 0; /* Reset the QN list */
     //printf("Starting QN:\n");
@@ -999,13 +1002,13 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
             int n = 0;
             /* Specifically, each of the QN_COUNT quantum numbers */
             for ( n = 0; n < QN_COUNT; n++ ) {
-              if ( memcmp(&(drlist[l].qn[n*QN_DIGITS]),
+              if ( memcmp(&(thrs->drlist[l].qn[n*QN_DIGITS]),
                           &(thrs->compdata[k].qn[m*QN_DIGITS]),
                           sizeof(int)*QN_DIGITS) == 0 ) {
                 /* We found the QN, skip it unless it was also found last time */
-                if ( drlist[l].seen >= j ) {
+                if ( thrs->drlist[l].seen >= j ) {
                   //printf("  Match QN %d %d %d\n", drlist[l].qn[n*QN_DIGITS], drlist[l].qn[n*QN_DIGITS+1], drlist[l].qn[n*QN_DIGITS+2]);
-                  drlist[l].seen = j+1;
+                  thrs->drlist[l].seen = j+1;
                   found = 1;
                   /* break; */
                 }
@@ -1023,18 +1026,19 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
           }
           /* For first frequency in resonance, we can add the QN to the list */
           if ( !found && j == 0 ) {
-            if ( drlen >= drsize ) {
-              drsize = (drsize+1)*2;
+            if ( drlen >= thrs->drsize ) {
+              thrs->drsize = (thrs->drsize+1)*2;
               //printf("Increasing memory allocation to %u\n", thrs->compdatasize);
-              drlist = realloc(drlist, sizeof(dblres_check)*drsize);
-              if ( drlist == NULL ) {
+              thrs->drlist = realloc(thrs->drlist,
+                                     sizeof(dblres_check)*thrs->drsize);
+              if ( thrs->drlist == NULL ) {
 	        perror("Out of memory\n");
 	        return 35;
               }
             }
-            drlist[drlen].seen = 1;
-            memcpy(drlist[drlen].qn, thrs->compdata[k].qn,
-                   sizeof(drlist[drlen].qn));
+            thrs->drlist[drlen].seen = 1;
+            memcpy(thrs->drlist[drlen].qn, thrs->compdata[k].qn,
+                   sizeof(thrs->drlist[drlen].qn));
             //printf("  Added QN %d %d %d %d %d %d\n", drlist[drlen].qn[0], drlist[drlen].qn[1], drlist[drlen].qn[2], drlist[drlen].qn[3], drlist[drlen].qn[4], drlist[drlen].qn[5]);
             drlen++;
             drfail = 0;
@@ -1148,6 +1152,8 @@ int GA_thread_init(GA_thread *thread) {
   opts->compdata = NULL;
   opts->compdatasize = 0;
   opts->compdatacount = 0;
+  opts->drlist = NULL;
+  opts->drsize = 0;
 
 #ifndef USE_SPCAT_OBJ
   /* Use separate temporary files for each thread. */
