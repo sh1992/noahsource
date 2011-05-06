@@ -1,0 +1,23 @@
+# Main portion
+# - Listen on remote side
+# - Handle clients
+# - Manage jobs
+# - Route job notifications between client and problem-specific portion
+
+# Problem specific portion
+# - Listen on local side
+# - Receive GA wire protocol
+# - Split generations into jobs
+# - Save job input files to webserver
+# - Send/receive job notifications to/from dispatcher
+
+# TODO
+- Autoupdate
+- Log errors (PerlWatson), debug and avoid crashes
+- Scheduler (for Physics lab, LBR computer lab, Hartlab)
+- Consider sizing jobs such that each machine gets one job and all jobs
+  finish the at same time
+- Allow priorities: Prefer chemlab and 108, avoid physics, library
+- Python?
+- Remote QUIT capability, uninstaller
+

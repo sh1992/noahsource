@@ -9,18 +9,42 @@
 #include <math.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdarg.h>
+#include "ga-spectroscopy.checksum.h"
+
+#if THREADS
+#include <pthread.h>
+#endif
+
+#ifdef CLIENT_ONLY
+#include "ga-clientonly.h"
+#else
 #include "ga.h"
 #include "ga-spectroscopy.usage.h"
+#endif
 
 #ifdef USE_SPCAT_OBJ
 #include "spcat-obj/spcat-obj.h"
+#endif
+
+#ifdef _WIN32
+#include <windows.h> /* We use CreateProcess to replace invisible_system */
+#else
+#include <sys/socket.h>
+#include <netdb.h>
+#include <sys/wait.h>
+int invisible_system(int stdoutfd, int argc, ...);
+#endif
+
+#ifndef O_NOFOLLOW
+/* If O_NOFOLLOW is unsupported, we probably don't support symlinks anyway. */
+#define O_NOFOLLOW 0
 #endif
 
 #define BINS 600		/* Number of bins to use for comparison */
@@ -83,6 +107,8 @@ typedef struct {
   float doublerestol;
   unsigned obsrangemin, obsrangemax; /* Ignore outside these frequencies */
   int linkbc;
+  char *distributor;
+  char *tempdir;
 } specopts_t;
 
 #ifndef USE_SPCAT_OBJ
@@ -133,13 +159,13 @@ int load_spec_templates(specopts_t *opts) {
     sprintf(filename, "%s.%s", opts->template_fn, input_suffixes[i]);
     /* Load template */
     if ( ( fh = fopen(filename, "r") ) == NULL ) {
-      perror("Failed to open template file");
+      printf("Failed to open template file, errno=%d\n", errno);
       free(filename);
       return i+10;
     }
     fread(opts->template[i], sizeof(opts->template[i]), 1, fh);
     if ( ferror(fh) ) {
-      perror("Failed to read template file");
+      printf("Failed to read template file, errno=%d\n", errno);
       free(filename);
       return i+20;
     }
@@ -185,12 +211,12 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
                          &a, &b, trailing);
     else break; // Empty memfile wasn't opened
     if ( i == EOF && ferror(fh) ) {
-      perror("Failed to read template file");
+      printf("Failed to read template file, errno=%d\n", errno);
       return 3;
     }
     else if ( i == EOF ) break;
     else if ( i != 3 ) {
-      perror("File format error\n");
+      printf("File format error, errno=%d\n", errno);
       return 4;
     }
     //printf("%g %g", a,b);
@@ -200,7 +226,7 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
       //printf("Increasing memory allocation to %u\n", thrs->compdatasize);
       *storage = realloc(*storage, sizeof(datarow)*(*size));
       if ( *storage == NULL ) {
-	perror("Out of memory\n");
+	printf("Out of memory, errno=%d\n", errno);
 	return 5;
       }
     }
@@ -241,7 +267,7 @@ int load_spec_observation(specopts_t *opts) {
   FILE *fh;
   int rc = 0;
   if ( ( fh = fopen(opts->obsfile, "r") ) == NULL ) {
-    perror("Failed to open observation file");
+    printf("Failed to open observation file, errno=%d\n", errno);
     return 12;
   }
   rc = load_catfile(fh, &(opts->observation), &(opts->observationsize),
@@ -251,6 +277,16 @@ int load_spec_observation(specopts_t *opts) {
   return 0;
 }
 
+#ifdef USE_SPCAT_OBJ
+int generate_input_buffers(specopts_t *opts, char *buffers[], size_t bufsizes[], GA_segment *x) {
+  int i;
+  for ( i = 0; i < 2; i++ ) {
+    if ( ( bufsizes[i] = asprintf(&buffers[i], opts->template[i], x[0], x[1], x[2]) ) < 0 )
+      return i+1;
+  }
+  return 0;
+}
+#else
 int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
   char filename[128];
   int i;
@@ -261,7 +297,7 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
     snprintf(filename, sizeof(filename), "%s.%s", basename,
 	     input_suffixes[i]);
     if ( ( fh = fopen(filename, "w") ) == NULL ) {
-      perror("Failed to open input file");
+      printf("Failed to open input file, errno=%d\n", errno);
       return i+1;
     }
     // 
@@ -280,20 +316,31 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
     //fprintf(fh, opts->template[i], x[0], (x[1]+x[2])/2, (x[1]-x[2])/2); /* FIXME */
     /* Error checking for fprintf? */
     if ( fclose(fh) ) {
-      perror("Failed to close input file");
+      printf("Failed to close input file, errno=%d\n", errno);
       return i+1;
     }
   }
   return 0;
 }
+#endif
 
-int generate_input_buffers(specopts_t *opts, char *buffers[], size_t bufsizes[], GA_segment *x) {
-  int i;
-  for ( i = 0; i < 2; i++ ) {
-    if ( ( bufsizes[i] = asprintf(&buffers[i], opts->template[i], x[0], x[1], x[2]) ) < 0 )
-      return i+1;
+/* getline is a GNU extension. It reads a line of text, malloc/reallocing the
+ * output buffer as necessary. Implement it using fgets. */
+ssize_t my_getline(char **lineptr, size_t *n, FILE *stream) {
+  unsigned index = 0;
+  while ( index == 0 || (*lineptr)[index-1] != '\n' ) {
+    if ( index+1 >= *n ) { /* Increase buffer size */
+      *n = (*n+1)*2;
+      *lineptr = realloc(*lineptr, *n);
+      if ( *lineptr == NULL ) return -1; /* Failed to allocate memory */
+    }
+    /* Try to read some characters */
+    if ( fgets(*lineptr+index, *n-index, stream) ) {
+      index += strlen(*lineptr+index);
+    }
+    else break; /* Error or EOF */
   }
-  return 0;
+  return index;
 }
 
 int my_parseopt(const struct option *long_options, GA_settings *settings,
@@ -363,6 +410,12 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 42: /* linkbc */
     ((specopts_t *)settings->ref)->linkbc = 1;
     break;
+  case 43: /* distributed */
+    ((specopts_t *)settings->ref)->distributor = optarg;
+    break;
+  case 44: /* tempdir */
+    ((specopts_t *)settings->ref)->tempdir = optarg;
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -371,10 +424,11 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
 }
 
 int main(int argc, char *argv[]) {
-  GA_session ga;
   GA_settings settings;
   specopts_t specopts;
   time_t starttime = time(NULL); /* To compute runtime */
+  int rc = 0;
+  int i;
   /* After updating usage comments, run generate-usage.pl on this file
    * to update usage message header files.
    */
@@ -515,28 +569,48 @@ int main(int argc, char *argv[]) {
      * Matching tolerance 
      */
     {"drtol",      required_argument, 0, 41},
-    /** --linkbc NUMBER
+    /** --linkbc
      *
      * Run algorithm using B+C and B-C instead of B and C.
      */
-    {"linkbc",   no_argument, 0, 42},
+    {"linkbc",           no_argument, 0, 42},
+    /** --distributed DISTRIBUTOR
+     *
+     * Use DISTRIBUTOR for distributed computation.
+     */
+    {"distributed", required_argument, 0, 43},
+    /** --tempdir DIR
+     *
+     * Use DIR for temporary files.
+     */
+    {"tempdir",    required_argument, 0, 44},
     {0, 0, 0, 0}
   };
+#ifdef CLIENT_ONLY
+  FILE *config;
+#else
+  char *my_optstring = "o:t:m:b:S:w:P:";
   char *optlog = malloc(128);	/* Initial allocation */
-  int rc = 0;
-  int i;
 
   if ( !optlog ) { printf("Out of memory (optlog)\n"); exit(1); }
   optlog[0] = 0;
+
   GA_defaultsettings(&settings);
   settings.debugmode = 0;	/* Use non-verbose output */
   settings.popsize = 64;
   settings.generations = 200;
+#endif
+
   settings.ref = &specopts;
   specopts.basename_out = NULL;
   specopts.template_fn = "template-404";
   specopts.obsfile = "isopropanol-404.cat";
+#ifdef _WIN32
+  specopts.spcatbin = "./spcat.exe";
+#else
   specopts.spcatbin = "./spcat";
+#endif
+  specopts.tempdir = "temp";
   specopts.bins = BINS;
   specopts.distanceweight = 1.0;
   for ( i = 0; i < SEGMENTS; i++ )
@@ -550,7 +624,61 @@ int main(int argc, char *argv[]) {
   specopts.linkbc = 0;
   specopts.obsrangemin = RANGEMIN;
   specopts.obsrangemax = RANGEMAX;
-  GA_getopt(argc,argv, &settings, "o:t:m:b:S:w:P:", my_long_options, my_parseopt,
+  specopts.distributor = NULL;
+
+#ifdef CLIENT_ONLY
+  if ( argc != 3 ) {
+    printf("Usage: %s <configfile> <outfile>\nChecksum: %s\n",
+           argv[0], CHECKSUM);
+    exit(1);
+  }
+  if ( ( config = fopen(argv[1], "r") ) == NULL ) {
+    printf("Could not open config file %s, errno=%d\n", argv[1], errno);
+    exit(1);
+  }
+  {
+    char *line = NULL; size_t linelen = 0;
+    char key[512], value[4096];
+    while ( my_getline(&line, &linelen, config) > 0 ) {
+      int rc = sscanf(line, "CFG%*c %511s%*[ \t]%4095[^\r\n]", key, value);
+      /* Handle this command-line argument */
+      if ( rc == 1 || rc == 2 ) {
+        //printf("FIXME arg %d '%s' '%s'\n",rc, key, value);
+        for ( i = 0; my_long_options[i].name != 0; i++ ) {
+          if ( strcmp(key, my_long_options[i].name) != 0 ) continue;
+          /* Check for required argument */
+          if ( my_long_options[i].has_arg == 1 && rc == 1 ) {
+            printf("Option %s missing a required argument\n", key);
+            exit(1);
+          }
+          /* Pass to handler */
+          optarg = strdup(value); /* Don't free this */
+          if ( my_long_options[i].flag != NULL ) {
+            printf("Unsupported option structure: non-NULL flag\n");
+            exit(1);
+          }
+          my_parseopt(my_long_options, &settings, my_long_options[i].val, i);
+          break;
+        }
+      }
+      else break;
+    }
+    /* Check VERSION field */
+    if ( sscanf(line, "VERSION %s", key) != 1 ) {
+      printf("Version tag is missing from configuration.\n");
+      exit(1);
+    }
+    if ( strcmp(key, "ANY") == 0 ) {
+      printf("Warning: Ignoring version from configuration.\n");
+    }
+    else if ( strcmp(key, CHECKSUM) != 0 ) {
+      printf("Configuration version %s is incorrect.\n", key);
+      exit(1);
+    }
+    free(line);
+  }
+#else /* not CLIENT_ONLY */
+  GA_getopt(argc,argv, &settings, my_optstring, my_long_options, my_parseopt,
 	    gaspectroscopy_usage, &optlog);
 
   /* Check segment ranges */
@@ -566,20 +694,78 @@ int main(int argc, char *argv[]) {
       exit(1);
     }
   }
+
+  /* Connect to distributor */
+  if ( specopts.distributor ) {
+    struct addrinfo hints, *result, *rp;
+    int sock;
+    /* Parse distributor string for port number */
+    char *port = NULL;
+    if ( (port = strchr(specopts.distributor, ':')) != NULL ) {
+      port[0] = 0;
+      port++;
+    }
+    else port = "2222";
+
+    /* Look up the host and service */
+    memset(&hints, 0, sizeof(struct addrinfo));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = 0;
+    hints.ai_flags = AI_V4MAPPED | AI_ADDRCONFIG;
+    rc = getaddrinfo(specopts.distributor, port, &hints, &result);
+    if ( rc != 0 ) {
+      printf("Could not look up %s:%s, getaddrinfo returned %d\n",
+             specopts.distributor, port, rc);
+      exit(1);
+    }
+
+    /* Try to connect */
+    for ( rp = result; rp != NULL; rp = rp->ai_next ) {
+      sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+      if ( sock == -1 ) continue;
+      if ( connect(sock, rp->ai_addr, rp->ai_addrlen) != -1 ) break;
+      close(sock);
+    }
+    if ( rp == NULL ) {
+      printf("Could not connect to %s:%s\n", specopts.distributor, port);
+      exit(1);
+    }
+    freeaddrinfo(result);
+
+    /* Connected */
+    if ( (settings.distributor = fdopen(sock, "r+")) == NULL ) {
+      printf("Could not open socket handle, errno=%d\n", errno);
+      exit(1);
+    }
+    fprintf(settings.distributor, "%s\nVERSION %s\n", optlog+1, CHECKSUM);
+    settings.threadcount = 1;
+  }
+#endif /* not CLIENT_ONLY */
+
   /* Initialize observation storage */
   specopts.observation = NULL;
   specopts.observationsize = 0;
   specopts.observationcount = 0;
 
+#ifdef CLIENT_ONLY
+  specopts.basename_out = strdup(argv[2]);
+#else
   /* Choose an output file */
   if ( specopts.basename_out == NULL ) specopts.basename_out = ".";
   {
     DIR *x = opendir(specopts.basename_out);
     if ( x != NULL ) {		/* Given a directory */
       char *dir = specopts.basename_out;
-      if ( asprintf(&specopts.basename_out, "%s/tmp-gaspec-%d",
-		    dir, getpid()) == -1 ) {
-	printf("basename failed\n");
+      unsigned len = strlen(dir)+32;
+      specopts.basename_out = malloc(len);
+      if ( !specopts.basename_out ) {
+	printf("basename malloc failed\n");
+	exit(1);
+      }
+      if ( snprintf(specopts.basename_out, len, "%s/tmp-gaspec-%d",
+                    dir, getpid()) >= len ) {
+	printf("basename overflow\n");
 	exit(1);
       }
     }
@@ -606,36 +792,40 @@ int main(int argc, char *argv[]) {
     /* Open new STDOUT handle */
     fflush(NULL);		       /* Flush output streams. */
     if ( ( fh = freopen(filename, "w", stdout) ) == NULL ) {
-      perror("Failed to open log file");
+      printf("Failed to open log file, errno=%d\n", errno);
       free(filename);
       exit(1);
     }
     free(filename);
     dup2(fileno(fh), STDOUT_FILENO); /* Make sure fd #1 is STDOUT */
     if ( ( settings.stdoutfh = fdopen(stdoutfd, "w") ) == NULL ) {
-      perror("Failed to reopen stdout");
+      printf("Failed to reopen stdout, errno=%d\n", errno);
       exit(1);
     }
     qprintf(&settings, "Details saved in %s.log\n", specopts.basename_out);
   }
+#endif
+#ifndef _WIN32
   /* Open /dev/null to allow hiding of SPCAT output. Non-portable. */
   {
     FILE *devnull;
     if ( ( devnull  = fopen("/dev/null", "w") ) == NULL ) {
-      perror("Can't open /dev/null");
+      printf("Can't open /dev/null, errno=%d\n", errno);
       exit(1);
     }
     if ( ( specopts.stdoutfd = dup(fileno(stdout)) ) == -1 ) {
-      perror("Can't dup stdout");
+      printf("Can't dup stdout, errno=%d\n", errno);
       exit(1);
     }
     if ( ( specopts.devnullfd = fileno(devnull) ) == -1 ) {
-      perror("Can't get fileno of devnull");
+      printf("Can't get fileno of devnull, errno=%d\n", errno);
       exit(1);
     }
   }
-
+#endif
+#ifndef CLIENT_ONLY
   printf("%s\n", optlog+1); free(optlog);
+#endif
 
   qprintf(&settings, "Using output file %s\n", specopts.basename_out);
 
@@ -651,6 +841,7 @@ int main(int argc, char *argv[]) {
     qprintf(&settings, "load_spec_observation failed: %d\n", rc);
     return rc;
   }
+#ifndef CLIENT_ONLY
   /* Load starting population */
   if ( specopts.popfile ) {
     printf("Loading inital population %s\n", specopts.popfile);
@@ -685,6 +876,7 @@ int main(int argc, char *argv[]) {
       printf("0000 %04u GD %10u %10u %10u\n", idx, specopts.popdata[idx*SEGMENTS], specopts.popdata[idx*SEGMENTS+1],specopts.popdata[idx*SEGMENTS+2]);
     }*/
   }
+#endif
   /* Load double resonance */
   if ( specopts.drfile ) {
     printf("Loading double resonances %s\n", specopts.drfile);
@@ -694,11 +886,11 @@ int main(int argc, char *argv[]) {
     //specopts.doublereslen = 0;
     FILE *fh = fopen(specopts.drfile, "r");
     if ( fh == NULL ) {
-      perror("Failed to open drfile");
+      qprintf(&settings, "Failed to open drfile, errno=%d\n", errno);
       return 1;
     }
     char *line = NULL; size_t linelen = 0;
-    while ( getline(&line, &linelen, fh) > 0 ) {
+    while ( my_getline(&line, &linelen, fh) > 0 ) {
       float val; int ptrbump; char *linepos = line;
       dblres_relation *row; int peaklistsize = 0;
       /* Allocate space for the new row */
@@ -737,64 +929,170 @@ int main(int argc, char *argv[]) {
     }
     fclose(fh);
   }
+
   printf("Using %d bins\n", specopts.bins);
 
-  /* Run the genetic algorithm */
-  if ( (rc = GA_init(&ga, &settings, SEGMENTS)) != 0 ) {
-    qprintf(&settings, "GA_init failed: %d\n", rc);
-    return rc;
-  }
-
-#if ENUMERATE	       /* Debugging mode: enumeration of all values */
+#ifdef CLIENT_ONLY
+  /* Do something */
   {
-    if ( SEGMENTS != 1 || settings.threadcount != 1 ) {
-      qprintf(&settings, "Settings error\n");
+    struct GAC_individual { unsigned int index; GA_individual indiv; }
+      *pop = NULL;
+    unsigned int popsize = 0, ncompleted = 0, pos = 0;
+    /* Load from/save to the output file */
+    char *line = NULL; size_t linelen = 0; FILE *outfile;
+    /* Initialize GA objects */
+    GA_session ga;
+    GA_thread thread;
+    ga.settings = &settings;
+    thread.session = &ga;
+    thread.ref = NULL;
+    rc = GA_thread_init(&thread);
+    if ( rc != 0 ) {
+      printf("GA_thread_init failed: %d", rc);
       exit(1);
     }
-    GA_individual *x = &(ga.population[0]);
-    int rc;
-    unsigned int i;
-    i = -1;//2082167296;
-    do {
-      i+=10000;
-      x->segments[0] = grayencode(i);
-      rc = GA_fitness(&ga, ga.threads[0].ref, x);
-      if ( rc != 0 ) {
-	qprintf(&settings, "fitness error, %d\n", rc);
-	exit(1);
+    /* Load population from config file */
+    while ( my_getline(&line, &linelen, config) > 0 ) {
+      unsigned int index, offset; char *subline = line;
+      int rc = sscanf(line, "ITEM %u%n", &index, &offset);
+      /* Handle this item */
+      if ( rc < 1 ) {
+        printf("Not an item: %s", line);
+        continue;
       }
-      printf("ENUM %u %f\n", i, x->fitness);
-    } while ( x->segments[0] <= 0xFFFFFFFF); //2107767296 );
+      /* Grow allocation if necessary */
+      if ( pos >= popsize ) {
+        popsize = (popsize+1)*2;
+        pop = realloc(pop, popsize*sizeof(struct GAC_individual));
+        if ( !pop ) {
+          printf("malloc failed while loading population.\n");
+          exit(1);
+        }
+      }
+      /* Prepare individual structure */
+      memset(&(pop[pos]), 0, sizeof(struct GAC_individual));
+      pop[pos].index = index;
+      pop[pos].indiv.gdsegments = malloc(sizeof(GA_segment)*SEGMENTS);
+      /* Load segments */
+      for ( i = 0; i < SEGMENTS; i++ ) {
+        subline += offset;
+        rc = sscanf(subline, "%u%n", &(pop[pos].indiv.gdsegments[i]), &offset);
+        if ( rc < 1 ) {
+          printf("Item parse failure: %s", line);
+          exit(1);
+        }
+      }
+      pos++;
+    }
+    popsize = pos;
+    /* Load state from output file */
+    if ( ( outfile = fopen(specopts.basename_out, "r") ) != NULL ) {
+      while ( my_getline(&line, &linelen, outfile) > 0 ) {
+        char linecheck[4]; unsigned int index;
+        /* Try to read a line from the file */
+        if ( ( sscanf(line, "FITNESS %u %lf %3s", &index,
+                      &(pop[ncompleted].indiv.fitness), linecheck) != 3 ) ||
+              ( strcmp(linecheck, "EOL") != 0 ) ) break;
+        if ( index != pop[ncompleted].index ) {
+          printf("Output file (%u) does not match config (%u) at line %u\n",
+                 index, pop[ncompleted].index, ncompleted+1);
+          ncompleted = 0; /* Don't trust the data */
+          break;
+        }
+        ncompleted++;
+      }
+      fclose(outfile);
+    }
+    /* Now open output file for writing */
+    if ( ( outfile = fopen(specopts.basename_out, "w") ) == NULL ) {
+      printf("Could not open output file %s, errno=%d\n",
+             specopts.basename_out, errno);
+      exit(1);
+    }
+    /* Start read loop */
+    for ( pos = 0; pos < popsize; pos++ ) {
+      if ( pos >= ncompleted ) {
+        printf("Evaluating %u\n", pop[pos].index);
+        rc = GA_fitness(&ga, thread.ref, &(pop[pos].indiv));
+        if ( rc != 0 ) {
+          printf("Fitness of item %u returned error %d\n", pop[pos].index, rc);
+          exit(1);
+        }
+      }
+      printf("FITNESS %04d %f EOL\n", pop[pos].index, pop[pos].indiv.fitness);
+      fflush(stdout);
+      fprintf(outfile, "FITNESS %04d %f EOL\n",
+              pop[pos].index, pop[pos].indiv.fitness);
+      fflush(outfile);
+    }
+    GA_thread_free(&thread);
+    free(line);
+    free(pop);
   }
-#else  /* !ENUMERATE */
 
-  printf("Starting %d generations\n", settings.generations);
-  if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
-    qprintf(&settings, "GA_evolve failed: %d\n", rc);
-    return rc;
-  }
+  qprintf(&settings, "Finished.\nTook %u seconds\n", time(NULL)-starttime);
+#else
+  {
+    GA_session ga;
+    /* Run the genetic algorithm */
+    if ( (rc = GA_init(&ga, &settings, SEGMENTS)) != 0 ) {
+      qprintf(&settings, "GA_init failed: %d\n", rc);
+      return rc;
+    }
 
-  /* Compute runtime */
-  starttime = time(NULL)-starttime;
-  qprintf(&settings, "Finished.\nTook %u seconds (%f sec/gen)\n",
-	  starttime, starttime/(settings.generations+1.0));
+#if 0	       /* Debugging mode: enumeration of all values */
+    {
+      if ( SEGMENTS != 1 || settings.threadcount != 1 ) {
+        qprintf(&settings, "Settings error\n");
+        exit(1);
+      }
+      GA_individual *x = &(ga.population[0]);
+      int rc;
+      unsigned int i;
+      i = -1;//2082167296;
+      do {
+        i+=10000;
+        x->segments[0] = grayencode(i);
+        rc = GA_fitness(&ga, ga.threads[0].ref, x);
+        if ( rc != 0 ) {
+	  qprintf(&settings, "fitness error, %d\n", rc);
+	  exit(1);
+        }
+        printf("ENUM %u %f\n", i, x->fitness);
+      } while ( x->segments[0] <= 0xFFFFFFFF); //2107767296 );
+    }
 #endif
-  /* Cleanup */
-  if ( (rc = GA_cleanup(&ga)) != 0 ) {
-    qprintf(&settings, "GA_cleanup failed: %d\n", rc);
-    return rc;
+
+    printf("Starting %d generations\n", settings.generations);
+    if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
+      qprintf(&settings, "GA_evolve failed: %d\n", rc);
+      return rc;
+    }
+
+    /* Compute runtime */
+    starttime = time(NULL)-starttime;
+    qprintf(&settings, "Finished.\nTook %u seconds (%f sec/gen)\n",
+	    starttime, starttime/(settings.generations+1.0));
+
+    /* Cleanup */
+    if ( (rc = GA_cleanup(&ga)) != 0 ) {
+      qprintf(&settings, "GA_cleanup failed: %d\n", rc);
+      return rc;
+    }
   }
+#endif
   free(specopts.basename_out);
   free(specopts.observation);
   free(specopts.doubleres);
   rc = 0;
-  /* TODO: Free memory */
+  /* TODO: Free more memory */
   /* Remove temporary files */
   /* printf("rmdir: %d\n", rmdir(tempdir)); */
   printf("Exiting: %d\n", rc);
   return rc;
 }
 
+#ifndef CLIENT_ONLY
 int GA_random_segment(GA_session *ga, const unsigned int i,
                       const unsigned int j, int *r) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
@@ -827,7 +1125,7 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
   char filename[128];
   snprintf(filename, sizeof(filename), "%s.pop", opts->basename_out);
   if ( ( fh = fopen(filename, "w") ) == NULL ) {
-    perror("Failed to open population output file");
+    qprintf(ga->settings, "Failed to open pop output file, errno=%d\n", errno);
     return 10;
   }
   for ( p = 0; p < ga->settings->popsize; p++ ) {
@@ -848,7 +1146,7 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
     }
   }
   if ( fclose(fh) ) {
-    perror("Failed to close input file");
+    qprintf(ga->settings, "Failed to close input file, errno=%d\n", errno);
     return 11;
   }
 
@@ -890,6 +1188,13 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
   return 1;
 }
 
+int GA_termination(const GA_session *ga) {
+  if ( ga->population[ga->fittest].unscaledfitness > -0.00001 )
+    return 1;
+  return 0;
+}
+#endif /* not CLIENT_ONLY */
+
 typedef struct { unsigned int index; double total; } sortable_bin;
 
 int bin_comparator(const void *a, const void *b) {
@@ -917,7 +1222,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   char *buffers[NFILE];
   size_t bufsizes[NFILE];
 #else
-  char filename[128];
+  char filename[256];
 #endif
 
 #ifdef USE_SPCAT_OBJ
@@ -931,7 +1236,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* Read SPCAT output buffer */
   if ( !bufsizes[ecat] ) fh = NULL;
   else if ( ( fh = fmemopen(buffers[ecat], bufsizes[ecat], "r") ) == NULL ) {
-    perror("Failed to open file");
+    qprintf(ga->settings, "Failed to open file, errno=%d\n", errno);
     return 15;
   }
   /******** FIXME TODO NEED TO SORT ********/
@@ -947,18 +1252,60 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* This way we can avoid running /bin/sh for every fitness
    * evaluation. This doesn't quite work as expected -- ^C often
    * fails if we use the recommended signal handling code. */
-  snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
   //tprintf("Running %s %s\n", opts->spcatbin, filename);
-  i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
 
+#ifdef _WIN32
+  snprintf(filename, sizeof(filename), "\"%s\" \"%s.\"",
+           opts->spcatbin, thrs->basename_temp);
+  {
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    DWORD exitCode;
+
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
+    si.cb = sizeof(si);
+    //printf("[%s] %s\n", opts->spcatbin, filename);
+    i = CreateProcess(opts->spcatbin, filename, NULL, NULL, FALSE,
+                      DETACHED_PROCESS /* invisible */, NULL, NULL, &si, &pi);
+    if ( i == 0 ) {
+      printf("CreateProcess: [%s] %s: failed, GetLastError=%d\n",
+             opts->spcatbin, filename, GetLastError());
+      return 11;
+    }
+    /* Wait until child process exits. */
+    i = WaitForSingleObject(pi.hProcess, INFINITE);
+    if ( i != WAIT_OBJECT_0 ) {
+      printf("WaitForSingleObject [%s] %s: returned %d, GetLastError=%d\n",
+             opts->spcatbin, filename, i, GetLastError());
+      return 11;
+    }
+    i = GetExitCodeProcess(pi.hProcess, &exitCode);
+    if ( i == 0 ) {
+      printf("GetExitCodeProcess [%s] %s: failed, GetLastError=%d\n",
+             opts->spcatbin, filename, GetLastError());
+      return 11;
+    }
+    if ( exitCode != 0 ) {
+      printf("SPCAT returned nonzero: [%s] %s: Exit code %d\n", exitCode);
+      return 10;
+    }
+    /* Close process and thread handles. */
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+  }
+#else
+  snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
+  i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
   if ( i != 0 ) return 11;		/* Failed */
   if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) )
     return 10;		/* Subprocess did not exit normally. */
+#endif
 
   /* Read SPCAT output file */
   snprintf(filename, sizeof(filename), "%s.cat", thrs->basename_temp);
   if ( ( fh = fopen(filename, "r") ) == NULL ) {
-    perror("Failed to open  file");
+    qprintf(ga->settings, "Failed to open cat file, errno=%d\n", errno);
     return 15;
   }
 #endif
@@ -1032,7 +1379,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
               thrs->drlist = realloc(thrs->drlist,
                                      sizeof(dblres_check)*thrs->drsize);
               if ( thrs->drlist == NULL ) {
-	        perror("Out of memory\n");
+	        qprintf(ga->settings, "Out of memory, errno=%d\n", errno);
 	        return 35;
               }
             }
@@ -1136,12 +1483,6 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   return 0;
 }
 
-int GA_termination(const GA_session *ga) {
-  if ( ga->population[ga->fittest].unscaledfitness > -0.00001 )
-    return 1;
-  return 0;
-}
-
 int GA_thread_init(GA_thread *thread) {
   specthreadopts_t *opts;
   /* Allocate persistant storage for computed data (this avoids having
@@ -1157,7 +1498,7 @@ int GA_thread_init(GA_thread *thread) {
 
 #ifndef USE_SPCAT_OBJ
   /* Use separate temporary files for each thread. */
-  opts->basename_temp = make_spec_temp("temp");
+  opts->basename_temp = make_spec_temp(((specopts_t *)(thread->session->settings->ref))->tempdir);
   if ( opts->basename_temp == NULL ) return 1;
   qprintf(thread->session->settings, "Using temporary file %s\n",
 	  opts->basename_temp);
@@ -1194,3 +1535,108 @@ int GA_thread_free(GA_thread *thread) {
   free(thrs);
   return 0;
 }
+
+#ifndef _WIN32
+pthread_mutex_t GA_iomutex = PTHREAD_MUTEX_INITIALIZER;
+/** Start a process with STDOUT redirected to the file descriptor
+ * stdoutfd, wait for it to finish, and then return its exit status.
+ * Thread-safe in conjunction with qprintf and tprintf.
+ * This function based on the sample implementation of system from:
+ * http://www.opengroup.org/onlinepubs/000095399/functions/system.html
+ *
+ * \see <a href="http://linux.die.net/man/3/system">system(3)</a>,
+ *      qprintf, tprintf
+ */
+int invisible_system(int stdoutfd, int argc, ...) {
+  int stat;
+  pid_t pid;
+  /*
+    struct sigaction sa, savintr, savequit;
+    sigset_t saveblock;
+  */
+  va_list ap;
+  char **argv;
+  int i;
+  /* FIXME - Debug only */
+  //struct timeval starttime, endtime;
+  if ( argc <= 0 ) {
+    printf("invisible_system: argc <= 0\n");
+    return 1;
+  }
+  argv = malloc(sizeof(char*)*(argc+1));
+  if ( !argv ) {
+    printf("invisible_system: argv malloc failed\n");
+    return 1;
+  }
+  va_start(ap, argc);
+  for ( i = 0; i < argc; i++ ) {
+    argv[i] = va_arg(ap, char *);
+  }
+  va_end(ap);
+  argv[argc] = NULL;
+  /*
+  sa.sa_handler = SIG_IGN;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigemptyset(&savintr.sa_mask);
+  sigemptyset(&savequit.sa_mask);
+  sigaction(SIGINT, &sa, &savintr);
+  sigaction(SIGQUIT, &sa, &savequit);
+  sigaddset(&sa.sa_mask, SIGCHLD);
+  sigprocmask(SIG_BLOCK, &sa.sa_mask, &saveblock);
+  */
+
+  /* LOCK io */
+#if THREADS && !CLIENT_ONLY
+  stat = pthread_mutex_lock(&GA_iomutex);
+  if ( stat ) { printf("tprintf: mutex_lock(io): %d\n", stat); exit(1); }
+#endif
+  flockfile(stdout);
+  fflush(NULL);
+  //gettimeofday(&starttime, NULL);/* To compute runtime */
+  if ((pid = fork()) == 0) {
+    /*
+    sigaction(SIGINT, &savintr, (struct sigaction *)0);
+    sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
+    sigprocmask(SIG_SETMASK, &saveblock, (sigset_t *)0);
+    */
+
+    /* Disable stdout */
+    if ( dup2(stdoutfd, STDOUT_FILENO) == -1 ) _exit(127);
+    funlockfile(stdout);
+
+    execv(argv[0], argv);
+    /* execl("/bin/sh", "sh", "-c", arg, (char *)0); */
+    _exit(127);
+  }
+  /* UNLOCK io */
+  funlockfile(stdout);
+#if THREADS && !CLIENT_ONLY
+  stat = pthread_mutex_unlock(&GA_iomutex);
+  if ( stat ) { printf("tprintf: mutex_unlock(io): %d\n", stat); exit(1); }
+#endif
+  free(argv);
+
+  if (pid == -1) {
+    printf("invisible_system: fork failed, errno=%d\n", errno);
+    stat = -1; /* errno comes from fork() */
+  } else {
+    while (waitpid(pid, &stat, 0) == -1) {
+      if (errno != EINTR){
+	stat = -1;
+	printf("invisible_system: waitpid fail, errno=%d\n", errno);
+	break;
+      }
+    }
+  }
+  //gettimeofday(&endtime, NULL);
+  //printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
+  /*
+  sigaction(SIGINT, &savintr, (struct sigaction *)0);
+  sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
+  sigprocmask(SIG_SETMASK, &saveblock, (sigset_t *)0);
+  */
+
+  return(stat);
+}
+#endif

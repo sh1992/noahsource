@@ -1,0 +1,12 @@
+?
+	A ga-spectroscopy process, sends generations to Dispatcher.
+Generation
+	A GA generation which the Dispatcher splits into Workunits
+Dispatcher
+	Receives problems, splits them into Workunits, etc. (FIXME)
+Server
+	Problem-independent bridge between the Dispatcher and the Workers
+Worker
+	Problem-independent process that receives Workunits and processes them
+Workunit
+	A unit of work that gets sent to a Worker

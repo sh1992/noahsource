@@ -1,0 +1,50 @@
+TERMS OF USE AND PRIVACY POLICY
+
+1. DEFINITIONS
+
+"IT" and "ITS" refer to the software package to which this license applies.
+
+"YOU" and "YOUR" refer to the entity receiving said software package.
+
+"WE", "US", and "OUR" refer to the entity originating said software package.
+
+"REASONABLE" shall be defined at OUR sole discretion. Such definition is subject to change without notice.
+
+"INFORMATION" refers collectively to personally identifiable and non-personally identifiable information.
+
+2. ACCEPTANCE OF TERMS
+
+By installing or using IT, YOU denote YOUR acceptance of these terms. If you do not accept these terms, do not install or use IT, and destroy any copies of IT you have in your possession.
+
+2. GRANT OF LICENSE
+
+This license grants YOU a limited nonexclusive license to install and use IT on an unlimited number computers, provided YOU are not otherwise restricted from installing or using IT on said computers, subject to the following conditions:
+
+    i) YOU may not use IT outside of its intended purpose.
+    ii) YOU may not tamper with the operation of IT or its components.
+
+3. USE OF RESOURCES
+
+IT may elect to consume certain resources of YOUR computer, which may include
+
+    i) CPU processing time,
+    ii) network and internet bandwidth,
+    iii) storage and memory capacity,
+    iv) or any other available resource not listed here.
+
+By installing this software, YOU grant permission for IT to use these resources in any REASONABLE manner until YOU remove IT from your computer.
+
+4. PRIVACY POLICY
+
+Subject to YOUR acceptance of these terms, IT may collect INFORMATION of a REASONABLE nature, and use collected INFORMATION in a REASONABLE manner. YOU agree to grant US a non-revocable, non-exclusive, royalty-free, world-wide, perpetual license for US to use, modify, publish, et cetera all collected INFORMATION in any media, form, or format now known or hereafter developed, for any REASONABLE purpose.
+
+5. DISCLAIMER OF WARRANTY AND LIABILITY
+
+IT IS PROVIDED TO YOU "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL WE, OR ANY ENTITY OTHER THAN YOU, BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF IT, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+6. ADDITIONAL NOTICES
+
+Some versions of IT include wxWidgets. http://www.wxwidgets.org/
+
+Some versions of IT include Strawberry Perl. http://strawberryperl.com/
+

@@ -29,8 +29,6 @@ static int32_t randtbl[32] = {
 
 #if THREADS
 static void *GA_do_thread (void * arg);
-/* Consider abandoning this mutex in favor of flockfile on */
-static pthread_mutex_t iomutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 static int astrcat(char **s, const char *append);
 
@@ -73,6 +71,8 @@ int GA_init(GA_session *session, GA_settings *settings,
     settings->elitism = (unsigned)sqrt(settings->popsize);
 
   /* Enforce even numbers by rounding (down) to next even number */
+  /* FIXME This is probably no longer required since the
+   * expunging fix */
   if ( settings->elitism % 2 ) {
     settings->elitism--;
     qprintf(settings, "Elitism must be even, new value is %u\n",
@@ -423,18 +423,55 @@ int GA_comparator(const void *a, const void *b) {
   else return 0; /* x-y; */	/* If equal sort by index to preserve order */
 }
 
+static void GA_cache_fitness(GA_session *session, unsigned int i,
+                             unsigned int hashbucket) {
+  GA_segment *ptr;
+#if THREADS
+  /* LOCK fitnesscache */
+  int j = pthread_mutex_lock(&(session->cachemutex));
+  if ( j ) { qprintf(session->settings,
+                     "GA_dcf: mutex_lock(cache_w): %d\n", j); exit(1); }
+#endif
+  if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 ) {
+    /* First demote the first-level hash to second-level */
+    ptr = session->fitnesscache[hashbucket][1].segments;
+    memcpy(&(session->fitnesscache[hashbucket][1]),
+           &(session->fitnesscache[hashbucket][0]), sizeof(GA_individual));
+    session->fitnesscache[hashbucket][1].segments = ptr;
+    memcpy(ptr, session->fitnesscache[hashbucket][0].segments,
+           sizeof(GA_segment)*session->population[i].segmentcount);
+  }
+  ptr = session->fitnesscache[hashbucket][0].segments;
+  memcpy(&(session->fitnesscache[hashbucket][0]),
+         &(session->population[i]), sizeof(GA_individual));
+  session->fitnesscache[hashbucket][0].unscaledfitness = 1;
+  session->fitnesscache[hashbucket][0].segments = ptr;
+  memcpy(ptr, session->population[i].segments,
+         sizeof(GA_segment)*session->population[i].segmentcount);
+#if THREADS
+  /* UNLOCK fitnesscache */
+  j = pthread_mutex_unlock(&(session->cachemutex));
+  if ( j ) { qprintf(session->settings,
+	       "GA_dcf: mutex_unlock(cache_w): %d\n", j); exit(1); }
+#endif
+}
+
+static unsigned int GA_hash_individual(GA_session *session, unsigned int i) {
+  GA_segment hashtemp = 0;
+  int j;
+  for ( j = 0; j < session->population[i].segmentcount; j++ )
+    hashtemp ^= session->population[i].segments[j];
+  return hashtemp % session->cachesize;
+}
+
 static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   GA_session *session = thread->session;
   int j;
   int found = 0;
-  GA_segment hashtemp = 0;
-  unsigned int hashbucket = 0;
   /* GA_individual founditem; */
 
   /* Hash the individual to determine caching location */
-  for ( j = 0; j < session->population[i].segmentcount; j++ )
-    hashtemp ^= session->population[i].segments[j];
-  hashbucket = hashtemp % session->cachesize;
+  unsigned int hashbucket = GA_hash_individual(session, i);
 
   /* Check in the cache for an earlier computation of the fitness value */
 #if THREADS
@@ -461,7 +498,8 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
 		     "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
 #endif
 
-#if !THREADS
+#if 0
+  //!THREADS
   /* Also check the earlier entries in the new population. Not
    * threadsafe. */
   if ( !found ) {
@@ -495,6 +533,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   /* memcpy(&founditem, &(session->population[i]), sizeof(GA_individual)); */
   if ( !found ) {
     int rc = 0;
+    if ( session->settings->distributor ) return 0;
     if ( ((rc = GA_fitness(session, thread->ref, /* FIXME */
 			   &session->population[i])) != 0)
 	 /* || isnan(session->population[i].fitness) */ ) { /* nan okay now */
@@ -521,46 +560,42 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
 	  found, hashtemp, hashbucket, session->population[i].fitness);
   */
   /* Save the fitness in the cache */
-  if ( ( found == 0 ) || ( found > 1 ) ) {
-    GA_segment *ptr;
-#if THREADS
-    /* LOCK fitnesscache */
-    j = pthread_mutex_lock(&(session->cachemutex));
-    if ( j ) { qprintf(session->settings,
-		       "GA_dcf: mutex_lock(cache_w): %d\n", j); exit(1); }
-#endif
-    if ( session->fitnesscache[hashbucket][0].unscaledfitness != 0 ) {
-      /* First demote the first-level hash to second-level */
-      ptr = session->fitnesscache[hashbucket][1].segments;
-      memcpy(&(session->fitnesscache[hashbucket][1]),
-	     &(session->fitnesscache[hashbucket][0]), sizeof(GA_individual));
-      session->fitnesscache[hashbucket][1].segments = ptr;
-      memcpy(ptr, session->fitnesscache[hashbucket][0].segments,
-	     sizeof(GA_segment)*session->population[i].segmentcount);
-    }
-    ptr = session->fitnesscache[hashbucket][0].segments;
-    memcpy(&(session->fitnesscache[hashbucket][0]),
-	   &(session->population[i]), sizeof(GA_individual));
-    session->fitnesscache[hashbucket][0].unscaledfitness = 1;
-    session->fitnesscache[hashbucket][0].segments = ptr;
-    memcpy(ptr, session->population[i].segments,
-	   sizeof(GA_segment)*session->population[i].segmentcount);
-#if THREADS
-    /* UNLOCK fitnesscache */
-    j = pthread_mutex_unlock(&(session->cachemutex));
-    if ( j ) { qprintf(session->settings,
-		       "GA_dcf: mutex_unlock(cache_w): %d\n", j); exit(1); }
-#endif
-  }
+  if ( ( found == 0 ) || ( found > 1 ) )
+    GA_cache_fitness(session, i, hashbucket);
   return found;
 }
 
 #if THREADS
+static void thread_send_result(GA_session *session, int in, int found) {
+  /* Return the result to main program */
+  int rc = pthread_mutex_lock(&(session->outmutex));
+  if ( rc ) { qprintf(session->settings,
+		"GA_do_thread: mutex_lock(out): %d\n", rc); exit(1); }
+  while ( session->outflag ) {
+    /* printf("Waiting for output queue to empty...\n"); */
+    rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
+    if ( rc ) { qprintf(session->settings,
+		  "GA_do_thread: cond_wait(out): %d\n", rc); exit(1); }
+    /* printf("Retrying output\n"); */
+  }
+  session->outindex  = in;
+  session->outretval = found;
+  session->outflag = 1;
+  rc = pthread_cond_broadcast(&(session->outcond));
+  if ( rc ) { qprintf(session->settings,
+		"GA_do_thread: cond_bcast(out): %d\n", rc); exit(1); }
+  rc = pthread_mutex_unlock(&(session->outmutex));
+  if ( rc )
+    { qprintf(session->settings,
+	"GA_do_thread: mutex_unlock(out): %d\n", rc); exit(1); }
+  /* printf("Output completed\n"); */
+}
+
 static void *GA_do_thread (void * arg) {
   GA_thread *thread = (GA_thread *)arg;
   GA_session *session = thread->session;
   while ( 1 ) {
-    int in, found;
+    int in, found, last;
     int rc;
 
     /* Find a job to process */
@@ -577,8 +612,13 @@ static void *GA_do_thread (void * arg) {
     }
     in = session->inindex;	/* We got data to process! */
 
+    /* In distributed mode, we'll handle the entire population in this
+     * thread. */
+    if ( session->settings->distributor ) last = session->settings->popsize;
+    else last = in + 1;
+    session->inindex = last;
+
     /* Is there another job to dispatch? */
-    session->inindex++;
     if ( session->inindex < session->settings->popsize ) {
       rc = pthread_cond_signal(&(session->incond));
       if ( rc )
@@ -590,31 +630,69 @@ static void *GA_do_thread (void * arg) {
     if ( rc ) { qprintf(session->settings,
 			"GA_do_thread: mutex_unlock(in): %d\n", rc); exit(1); }
 
-    /* Process item */
-    found = GA_do_checkfitness(thread, in);
-
-    /* Return the result to main program */
-    rc = pthread_mutex_lock(&(session->outmutex));
-    if ( rc ) { qprintf(session->settings,
-			"GA_do_thread: mutex_lock(out): %d\n", rc); exit(1); }
-    while ( session->outflag ) {
-      /* printf("Waiting for output queue to empty...\n"); */
-      rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
-      if ( rc ) { qprintf(session->settings,
-			  "GA_do_thread: cond_wait(out): %d\n", rc); exit(1); }
-      /* printf("Retrying output\n"); */
+    /* Process item or items */
+    if ( session->settings->distributor ) {
+      unsigned int i, index, nexpected = 0;
+      /* Check caches and send individuals to the distributor */
+      for ( i = in; i < last; i++ ) {
+        if ( ( found = GA_do_checkfitness(thread, i) ) != 0 ) {
+          /* Found in cache */
+          thread_send_result(session, i, found);
+        }
+        else { /* Send to distributor */
+          unsigned int j;
+          fprintf(session->settings->distributor, "ITEM %d", i);
+          for ( j = 0; j < session->population[i].segmentcount; j++ ) {
+            fprintf(session->settings->distributor, " %u",
+                    session->population[i].gdsegments[j]);
+          }
+          fprintf(session->settings->distributor, "\n");
+          nexpected++;
+        }
+      }
+      fprintf(session->settings->distributor, "DISPATCH\n");
+      fflush(session->settings->distributor);
+      /* Read results from the distributor and dispatch appropriately */
+      i = 0;
+      while ( 1 ) {
+        char line[1024];
+        double fitness;
+        /* Read result */
+        if ( fgets(line, 1024, session->settings->distributor) == NULL ) {
+          printf("Read error from distributor, errno=%d\n", errno);
+          return NULL;
+        }
+        //printf("  %s  at i=%u/%u\n", line, i, nexpected);
+        /* DONE signal */
+        if ( strncmp(line, "DONE", 4) == 0 ) {
+          if ( i == nexpected ) break;
+          printf("Premature DONE while reading from distributor\n");
+          return NULL;
+        }
+        /* Prevent overflow */
+        if ( i >= nexpected ) {
+          printf("Didn't recieve DONE while reading from distributor\n");
+          return NULL;
+        }
+        /* Parse message */
+        if ( sscanf(line, "FITNESS %u %lf", &index, &fitness) != 2 ) {
+          printf("Parse error on message %s from distributor\n", line);
+          return NULL;
+        }
+        if ( index < in || index >= last ) {
+          printf("Invalid index %u from distributor\n", index);
+          return NULL;
+        }
+        session->population[index].fitness = fitness;
+        GA_cache_fitness(session, index, GA_hash_individual(session, in));
+        thread_send_result(session, index, found);
+        i++;
+      }
     }
-    session->outindex  = in;
-    session->outretval = found;
-    session->outflag = 1;
-    rc = pthread_cond_broadcast(&(session->outcond));
-    if ( rc ) { qprintf(session->settings,
-			"GA_do_thread: cond_bcast(out): %d\n", rc); exit(1); }
-    rc = pthread_mutex_unlock(&(session->outmutex));
-    if ( rc )
-      { qprintf(session->settings,
-		"GA_do_thread: mutex_unlock(out): %d\n", rc); exit(1); }
-    /* printf("Output completed\n"); */
+    else {
+      found = GA_do_checkfitness(thread, in);
+      thread_send_result(session, in, found);
+    }
   }
   return NULL;
 }
@@ -1314,7 +1392,7 @@ int qprintf(const GA_settings *settings, const char *format, ...) {
   int rc = 0;
 #if THREADS
   { /* LOCK io */
-    int trc = pthread_mutex_lock(&iomutex);
+    int trc = pthread_mutex_lock(&GA_iomutex);
     if ( trc ) { printf("qprintf: mutex_lock(io): %d\n", trc); exit(1); }
   }
   flockfile(stdout);
@@ -1332,7 +1410,7 @@ int qprintf(const GA_settings *settings, const char *format, ...) {
   /* funlockfile(settings->stdoutfh); */
   funlockfile(stdout);
   { /* UNLOCK io */
-    int trc = pthread_mutex_unlock(&iomutex);
+    int trc = pthread_mutex_unlock(&GA_iomutex);
     if ( trc ) { printf("qprintf: mutex_unlock(io): %d\n", trc); exit(1); }
   }
 #endif
@@ -1344,7 +1422,7 @@ int tprintf(const char *format, ...) {
   int rc = 0;
 #if THREADS
   { /* LOCK io */
-    int trc = pthread_mutex_lock(&iomutex);
+    int trc = pthread_mutex_lock(&GA_iomutex);
     if ( trc ) { printf("tprintf: mutex_lock(io): %d\n", trc); exit(1); }
   }
   flockfile(stdout);
@@ -1355,7 +1433,7 @@ int tprintf(const char *format, ...) {
 #if THREADS
   funlockfile(stdout);
   { /* UNLOCK io */
-    int trc = pthread_mutex_unlock(&iomutex);
+    int trc = pthread_mutex_unlock(&GA_iomutex);
     if ( trc ) { printf("tprintf: mutex_unlock(io): %d\n", trc); exit(1); }
   }
 #endif
@@ -1391,102 +1469,4 @@ timeval_diff(struct timeval *difference,
                    difference->tv_usec;
 
 } /* timeval_diff() */
-
-/** Start a process with STDOUT redirected to the file descriptor
- * stdoutfd, wait for it to finish, and then return its exit status.
- * This function based on the sample implementation of system from:
- * http://www.opengroup.org/onlinepubs/000095399/functions/system.html
- */
-int invisible_system(int stdoutfd, int argc, ...) {
-  int stat;
-  pid_t pid;
-  /*
-    struct sigaction sa, savintr, savequit;
-    sigset_t saveblock;
-  */
-  va_list ap;
-  char **argv;
-  int i;
-  /* FIXME - Debug only */
-  //struct timeval starttime, endtime;
-  if ( argc <= 0 ) {
-    printf("invisible_system: argc <= 0\n");
-    return 1;
-  }
-  argv = malloc(sizeof(char*)*(argc+1));
-  if ( !argv ) {
-    printf("invisible_system: argv malloc failed\n");
-    return 1;
-  }
-  va_start(ap, argc);
-  for ( i = 0; i < argc; i++ ) {
-    argv[i] = va_arg(ap, char *);
-  }
-  va_end(ap);
-  argv[argc] = NULL;
-  /*
-  sa.sa_handler = SIG_IGN;
-  sigemptyset(&sa.sa_mask);
-  sa.sa_flags = 0;
-  sigemptyset(&savintr.sa_mask);
-  sigemptyset(&savequit.sa_mask);
-  sigaction(SIGINT, &sa, &savintr);
-  sigaction(SIGQUIT, &sa, &savequit);
-  sigaddset(&sa.sa_mask, SIGCHLD);
-  sigprocmask(SIG_BLOCK, &sa.sa_mask, &saveblock);
-  */
-
-  /* LOCK io */
-#if THREADS
-  stat = pthread_mutex_lock(&iomutex);
-  if ( stat ) { printf("tprintf: mutex_lock(io): %d\n", stat); exit(1); }
-#endif
-  flockfile(stdout);
-  fflush(NULL);
-  //gettimeofday(&starttime, NULL);/* To compute runtime */
-  if ((pid = fork()) == 0) {
-    /*
-    sigaction(SIGINT, &savintr, (struct sigaction *)0);
-    sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
-    sigprocmask(SIG_SETMASK, &saveblock, (sigset_t *)0);
-    */
-
-    /* Disable stdout */
-    if ( dup2(stdoutfd, STDOUT_FILENO) == -1 ) _exit(127);
-    funlockfile(stdout);
-
-    execv(argv[0], argv);
-    /* execl("/bin/sh", "sh", "-c", arg, (char *)0); */
-    _exit(127);
-  }
-  /* UNLOCK io */
-  funlockfile(stdout);
-#if THREADS
-  stat = pthread_mutex_unlock(&iomutex);
-  if ( stat ) { printf("tprintf: mutex_unlock(io): %d\n", stat); exit(1); }
-#endif
-  free(argv);
-
-  if (pid == -1) {
-    printf("invisible_system: fork failed, errno=%d\n", errno);
-    stat = -1; /* errno comes from fork() */
-  } else {
-    while (waitpid(pid, &stat, 0) == -1) {
-      if (errno != EINTR){
-	stat = -1;
-	printf("invisible_system: waitpid fail, errno=%d\n", errno);
-	break;
-      }
-    }
-  }
-  //gettimeofday(&endtime, NULL);
-  //printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
-  /*
-  sigaction(SIGINT, &savintr, (struct sigaction *)0);
-  sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
-  sigprocmask(SIG_SETMASK, &saveblock, (sigset_t *)0);
-  */
-
-  return(stat);
-}
 

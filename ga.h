@@ -19,6 +19,7 @@
 #define GA_segment uint32_t
 /** The size, in bits, of a segment. */
 #define GA_segment_size 32
+#warning Using default GA_segment definition
 #endif
 
 /** A single individual of the population.
@@ -85,6 +86,9 @@ typedef struct GA_settings_struct {
   FILE *stdoutfh;
   /** Number of threads to use. */
   int threadcount;
+  /** Distributor for distributed algorithm. If NULL, evaluate fitness
+   * locally. */
+  FILE *distributor;
   /** Pointer to problem-specific options structure (for use in
    * options parsing and fitness evaluation). */
   void *ref;
@@ -403,13 +407,10 @@ int qprintf(const GA_settings *settings, const char *format, ...);
  */
 int tprintf(const char *format, ...);
 
-/** Spawn a process and return its exit status. Redirect the child
- * process's STDOUT to the file descriptor denoted by stdoutfd.
- * Thread-safe in conjunction with qprintf and tprintf.
- *
- * \see <a href="http://linux.die.net/man/3/system">system(3)</a>,
- *      qprintf, tprintf
- */
-int invisible_system(int stdoutfd, int argc, ...);
+#if THREADS
+/* Consider abandoning this mutex in favor of flockfile on */
+extern pthread_mutex_t GA_iomutex;/* = PTHREAD_MUTEX_INITIALIZER; */
+#endif
+
 #define _HAVE_GA_H
 #endif
