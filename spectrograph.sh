@@ -20,7 +20,12 @@ Usage: spectrograph.sh [-f <format>|-p|-P] [-t <title>] [-T <title>]
 
 EOF
 }
+
 BINDIR=$(dirname $(readlink -f $0))
+
+convert_filename() {
+    perl -I"$BINDIR" -Mgaspec -le 'print convert_filename(@ARGV)' "$1" "$2"
+}
 
 # Default options
 FORMAT=png
@@ -73,7 +78,8 @@ fi
 # Find .CAT files
 ORIGFN="$1"
 shift
-FN="`perl -e '$_=$ARGV[0];s/(\.\w*)?(.bz2)?$/.cat/;print $_' "$ORIGFN"`"
+BASEFN="`convert_filename "$ORIGFN" ''`"
+FN="$BASEFN.cat"
 MATCH="$1"
 shift
 
@@ -81,7 +87,7 @@ if [ -n "$1" -o "$MATCH" = "png" -o "$MATCH" = "postscript" ]; then
     echo "Warning: Check your command-line syntax"
 fi
 
-OUT="`perl -e '$_=$ARGV[0];s/(\.\w*)?(.bz2)?$/$ARGV[1]/;print $_' "$FN" ".int"`"
+OUT="$BASEFN.int"
 if [ -f $OUT ]; then
     # Regenerate .CAT file
     $BINDIR/spcat $FN || exit 1
@@ -95,7 +101,7 @@ fi
 [ -z "$TITLE" ] && TITLE=`basename "$FN" .cat`
 [ -z "$MATCHTITLE" -a -n "$MATCH" ] && MATCHTITLE=`basename "$MATCH" .cat`
 
-OUT="`perl -e '$_=$ARGV[0];s/(\.\w*)?(.bz2)?$/$ARGV[1]/;print $_' "$FN" "$EXT"`"
+OUT="$BASEFN$EXT"
 echo "$FN" '=>' "$OUT"
 (
 cat <<EOF
@@ -129,11 +135,11 @@ plot "$MATCH" using 1:(-10**(\$3)) with impulses title "$MATCHTITLE", 0 lt 0 tit
 
 unset multiplot
 EOF
-) | tee /tmp/bar | gnuplot
+) | gnuplot # | tee /tmp/bar | gnuplot
 
 
 if [ "$EXT" = ".png" -a -z "$NOFITNESS" ]; then
-    LOGFN="`perl -e '$_=$ARGV[0];s/(\.\w*)?((?:.bz2)?)$/.log$2/;print $_' "$ORIGFN"`"
+    LOGFN=`convert_filename "$ORIGFN" .log.`
     if [ -f $LOGFN ]; then
         perl $BINDIR/plotfitness.pl $LOGFN
     else

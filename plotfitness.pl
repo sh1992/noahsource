@@ -4,11 +4,15 @@
 # Takes ga-spectroscopy log files as input.
 #
 
+use FindBin;
+use lib $FindBin::Bin;
+use gaspec;
+use warnings;
+use strict;
+
 die "Usage: $0 <files>\n" unless @ARGV;
-foreach $fn ( @ARGV ) {
-    if ( $fn =~ m/\.bz2$/ )
-        { open F, '-|', 'bzip2', '-dc', $fn or die "bzip2 -d $fn: $!" }
-    else { open F, '<', $fn or die "$fn: $!" }
+foreach my $fn ( @ARGV ) {
+    *F = open_compressed($fn);
     my @gens = ();
     my $hasdynmut = 0;
     my $ytop = 0;
@@ -32,12 +36,13 @@ foreach $fn ( @ARGV ) {
     }
     $ytop++;
 
-    $outfn = $fn;
-    die "Invalid filename format: $fn\n" unless $outfn =~ s/\.log(\.crushed|\.bz2)*$/-fitness.png/;
-    $datfn = $outfn;
-    die "Invalid filename format: $fn\n" unless $datfn =~ s/\.png$/.dat/;
-    open DAT, '>', $datfn;
-    my @keys = qw/gen avg best/, $hasdynmut ? qw/leading trailing mutationrate/: ();
+    my $outfn = convert_filename($fn,'-fitness.png');
+    my $datfn = convert_filename($fn,'-fitness.dat');
+    my $gpfn = convert_filename($fn,'-fitness.gnuplot');
+
+    open DAT, '>', $datfn or die "Cannot open output file $datfn: $!";
+    my @keys = qw/gen avg best/;
+    push @keys, qw/leading trailing mutationrate/ if $hasdynmut;
     print DAT '# ', join(' ', @keys),"\n";
     foreach ( @gens ) {
         foreach my $key ( @keys ) {
@@ -47,14 +52,14 @@ foreach $fn ( @ARGV ) {
     }
     close DAT;
 
-    open G, '|-', 'gnuplot';
+    open G, '>', $gpfn or die "Cannot open output file $gpfn: $!";
     print G <<END;
 set term png size 1200,480
 set output "$outfn"
 set xrange [0:*]
 #set yrange [-45:$ytop]
-set y2range [0:3]
-set y2tics 0,1,1
+set y2range [0:.1]
+set y2tics 0,.05,.1
 set grid y2tics
 set xlabel "Generation"
 set ylabel "Fitness (0 is best)"
@@ -62,13 +67,15 @@ set y2label "Mutation rate, 0-1"
 set style data lines
 set title "$fn"
 END
-    print G 'plot "-" title "Average Fitness", "-" title "Best Fitness"',$hasdynmut ? ', "-" title "Leading Value", "-" title "Trailing Value", "-" title "Mutation Rate" axes x1y2 lt -1' : '',"\n";
-
-    foreach my $key ( qw/avg best/, $hasdynmut ? qw/leading trailing mutationrate/: () ) {
-        foreach ( @gens ) {
-            print G "$_->{gen} $_->{$key}\n";
-        }
-        print G "e\n";
+    print G "plot '$datfn' using 1:2 title 'Average Fitness' \\\n";
+    print G "   , '$datfn' using 1:3 title 'Best Fitness' \\\n";
+    if ( $hasdynmut ) {
+        print G "   , '$datfn' using 1:4 title 'Leading Value' \\\n";
+        print G "   , '$datfn' using 1:5 title 'Trailing Value' \\\n";
+        print G "   , '$datfn' using 1:6 title 'Mutation Rate' axes x1y2 lt -1 \\\n";
     }
+    print G "\n";
     close G;
+
+    system 'gnuplot', $gpfn;
 }
