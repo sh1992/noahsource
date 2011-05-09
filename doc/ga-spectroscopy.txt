@@ -1,4 +1,4 @@
-Usage: ga-spectroscopy [options]
+Usage: ./ga-spectroscopy [options]
 
 General GA options:
 
@@ -117,3 +117,54 @@ Minimum C value (in units compatible with template file).
 
 --cmax NUMBER
 Maximum C value (in units compatible with template file).
+
+--djmin NUMBER
+Minimum DJ value (in units compatible with template file).
+
+--djmax NUMBER
+Maximum DJ value (in units compatible with template file).
+
+--djkmin NUMBER
+Minimum DJK value (in units compatible with template file).
+
+--djkmax NUMBER
+Maximum DJK value (in units compatible with template file).
+
+--dkmin NUMBER
+Minimum DK value (in units compatible with template file).
+
+--dkmax NUMBER
+Maximum DK value (in units compatible with template file).
+
+--deljmin NUMBER
+Minimum delJ value (in units compatible with template file).
+
+--deljmax NUMBER
+Maximum delJ value (in units compatible with template file).
+
+--delkmin NUMBER
+Minimum delK value (in units compatible with template file).
+
+--delkmax NUMBER
+Maximum delK value (in units compatible with template file).
+
+--rangemin NUMBER
+Minimum observation range.
+
+--rangemax NUMBER
+Maximum observation range.
+
+--drfile FILE
+File containing double resonance data.
+
+--drtol TOLERANCE
+Matching tolerance
+
+--linkbc
+Run algorithm using B+C and B-C instead of B and C.
+
+--distributed DISTRIBUTOR
+Use DISTRIBUTOR for distributed computation.
+
+--tempdir DIR
+Use DIR for temporary files.

@@ -15,7 +15,7 @@ ga-numbers: $(DEPS) ga.usage.h ga.h
 SPECFLAGS = -DGA_segment=uint32_t -DGA_segment_size=32 -DTHREADS
 ga-spectroscopy: CFLAGS += $(SPECFLAGS)
 ga-spectroscopy: DEPS = ga.c
-ga-spectroscopy: $(DEPS) ga-spectroscopy.checksum.h ga.usage.h ga.h
+ga-spectroscopy: $(DEPS) ga-spectroscopy.checksum.h ga.usage.h ga-spectroscopy.usage.h ga.h
 # spcat.a
 
 # ga-spectroscopy-client (client-only binary)
@@ -43,7 +43,7 @@ spcat.a:
 
 clean:
 	-$(MAKE) -C spcat-obj clean
-	-rm -f *.o *.a *.checksum.h
+	-rm -f *.o *.a *.checksum.h *.usage.h
 	-rm -f ga-numbers ga-numbers.exe
 	-rm -f ga-spectroscopy ga-spectroscopy.exe
 	-rm -f ga-spectroscopy-client ga-spectroscopy-client.exe
