@@ -11,7 +11,7 @@ set -e
 
 # Build ga-spectroscopy-client and perl-wrapper for Windows
 # (using MinGW in Wine)
-(cd ..; sh make-wine.sh)
+(cd ..; rm -f ga-spectroscopy-client.exe; sh make-wine.sh || true; [ -f ga-spectroscopy-client.exe ])
 
 # Download template (contains distclient binaries, particularly Perl)
 [ -f $BIN ] || wget $URL
