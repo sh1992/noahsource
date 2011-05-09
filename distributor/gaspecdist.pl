@@ -21,7 +21,7 @@ my ($LHOST, $LPORT) = ('localhost', 2222);  # Listen for ga-spectroscopy
 my ($WHOST, $WPORT) = ('localhost', 9990);  # HTTP host and port
 
 # Load HTTP server information from server.conf
-open F, '<', 'server.conf' or die;
+open F, '<', 'server.conf' or die "Cannot load server.conf: $!";
 my $serverconf = from_json(join '', <F>);
 close F;
 $WHOST = $serverconf->{host} if $serverconf->{host};
