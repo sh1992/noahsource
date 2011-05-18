@@ -244,10 +244,19 @@ sub HandleSocket {
         }
         elsif ( $l =~ m/^DISPATCH/ ) {
             # Prepare this generation to be sent
+            my $foundothers = 0;
             foreach ( @items ) {
-                $_->{sent} = 0 if defined($_) and $_->{source} == $id;
+                if ( defined($_) and $_->{source} == $id ) {
+                    $_->{sent} = 0;
+                    $foundothers = 1;
+                }
             }
-            TrySending();
+            # Received empty population (entire population was in the cache)
+            if ( !$foundothers ) {
+                my $gasock = $socks{$id}{sock};
+                print $gasock "DONE\n";
+            }
+            else { TrySending() }
         }
         elsif ( !$socks{$id}{configfile} ) {
             if ( $l =~ m/^(CFG[A-Z0-9] (match|template|drfile) )(.+)/ ) {
