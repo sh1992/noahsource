@@ -62,7 +62,7 @@ const char output_suffixes[2][4] = {"out", "cat"};
 #define QN_DIGITS 3
 /** One row of a .CAT file */
 typedef struct {
-  float frequency, intensity;
+  float frequency, error, intensity;
   int qn[QN_COUNT*QN_DIGITS];
 } datarow;
 typedef struct {
@@ -199,27 +199,51 @@ int parseqn(const char *str) {
 }
 
 int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
+/*
   float a, b, maxb = 0;
   char trailing[1024];
+*/
+  float maxlgint = 0;
   int i = 0, j = 0;
   while ( 1 ) {
-    /* Magic incantation for: NUMBER (IGNORED NUMBER) NUMBER (REST OF LINE) */
-    //if ( fh ) i = fscanf(fh, "%g %*g %g %*[^\n]", &a, &b);
-    // 30310 3 7      10 3 8
-    // 303231013      231014
-    if ( fh ) i = fscanf(fh, "%g %*g %g %1024[^\r\n]",
-                         &a, &b, trailing);
-    else break; // Empty memfile wasn't opened
+    float freq, err, lgint;
+    struct {
+      /* This struct stores the split fields of the cat file. */
+      char freq[14], err[9], lgint[9], dr[3], elo[11], gup[4], tag[8],
+           qnfmt[5], qn[128];
+    } s;
+    /* Using a struct makes it very easy to zero out. */
+    memset(&s, 0, sizeof(s));
+
+    if ( !fh ) break; /* Empty memfile wasn't opened */
+
+    /* Kill newlines characters */
+    fscanf(fh, "%*[\r\n]");
+
+    /* Format of lines of .CAT file is described in spinv.pdf */
+    /* QN is only 24 characters, but also read any extra trailing data. */
+    i = fscanf(fh, "%13c%8c%8c%2c%10c%3c%7c%4c%127[^\r\n]", s.freq, s.err,
+               s.lgint, s.dr, s.elo, s.gup, s.tag, s.qnfmt, s.qn);
     if ( i == EOF && ferror(fh) ) {
       printf("Failed to read template file, errno=%d\n", errno);
       return 3;
     }
     else if ( i == EOF ) break;
-    else if ( i != 3 ) {
-      printf("File format error, errno=%d\n", errno);
+    else if ( i != 9 ) {
+      printf("File format error, fscanf errno=%d\n", errno);
       return 4;
     }
-    //printf("%g %g", a,b);
+
+    /* Convert string values */
+    errno = 0;
+    if ( errno == 0 ) freq  = strtof(s.freq,  NULL);
+    if ( errno == 0 ) err   = strtof(s.err,   NULL);
+    if ( errno == 0 ) lgint = strtof(s.lgint, NULL);
+    if ( errno != 0 ) {
+      printf("File format error, strtof errno=%d\n", errno);
+      return 4;
+    }
+
     /* Allocate additional memory, if neccessary */
     if ( *count >= *size ) {
       *size = ((*size)+1)*2;
@@ -230,18 +254,26 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
 	return 5;
       }
     }
-    if ( *count == 0 || b > maxb ) maxb = b;
-    (*storage)[*count].frequency = a;
-    //printf("POW 10^%f => %g\n", b, powf(10,b));
-    (*storage)[*count].intensity = b;//powf(10,b);
+
+    /* Store frequency, intensity values */
+    if ( *count == 0 || lgint > maxlgint ) maxlgint = lgint;
+    (*storage)[*count].frequency = freq;
+    (*storage)[*count].error = err;
+    /* Exponentiation occurs during scaling, below */
+    (*storage)[*count].intensity = lgint;
+
     /* Double resonance from trailing data */
-    /* FIXME: Assumes quantum numbers are of type 303! */
+    /* Ensure quantum numbers are of type 303 */
     /* PROGRAM DOES NOT SUPPORT VARIABLE QUANTUM NUMBER TYPES */
+    if ( strcmp(s.qnfmt, " 303") != 0 ) {
+      printf("CAT file does not has QNFMT %s, not 303.\n", s.qnfmt);
+      return 4;
+    }
     for ( i = 0; i < 2; i++ ) {
       for ( j = 0; j < 3; j++ ) {
         char str[3]; int val;
-        str[0] = trailing[25+12*i+j*2];
-        str[1] = trailing[25+12*i+j*2+1];
+        str[0] = s.qn[12*i+j*2];
+        str[1] = s.qn[12*i+j*2+1];
         str[2] = 0;
         val = parseqn(str);
         //printf("'%s'\n",trailing);
@@ -251,13 +283,13 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
       }
     }
     //printf("\n");
-    // Next item
+    /* Next item */
     (*count)++;
   }
   //printf("MAXB %g",maxb);
   for ( i=0; i < *count; i++ ) {
     //printf("POW 10^%f => ", (*storage)[i].b);
-    (*storage)[i].intensity = powf(10,(*storage)[i].intensity-maxb);
+    (*storage)[i].intensity = powf(10,(*storage)[i].intensity-maxlgint);
     //printf("%g\n", (*storage)[i].b);
   }
   return 0;

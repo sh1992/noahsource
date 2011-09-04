@@ -292,6 +292,7 @@ void GA_generate(GA_session *session, unsigned int i) {
     unsigned int a, b, j;
     /* Special case first generation */
     if ( session->generation == 0 ) {
+      /* FIXME FIXME FIXME: Why is this code here? Its presence causes "generation 0" mode to be used for generations 0 and 1! 20110517 */
       do {
         for ( j = 0; j < session->population[i].segmentcount; j++ ) {
           int r;
@@ -657,6 +658,7 @@ static void *GA_do_thread (void * arg) {
       while ( 1 ) {
         char line[1024];
         double fitness;
+        line[0] = 0;
         /* Read result */
         if ( fgets(line, 1024, session->settings->distributor) == NULL ) {
           printf("Read error from distributor, errno=%d\n", errno);
