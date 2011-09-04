@@ -1489,6 +1489,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     float comp = opts->distanceweight *
       powf(fabs(obsbin[i]-compbin[i]),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
+    if ( binerror[i] < .01 ) binerror[i] = .01;
     fitness += comp*binweights[i]*binerror[i];
   }
 
