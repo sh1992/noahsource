@@ -1249,6 +1249,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   double obsbin[opts->bins], compbin[opts->bins];
   int obsbincount[opts->bins], compbincount[opts->bins];
   double binweights[opts->bins]; /* 20110215, J-weighting */
+  double binerror[opts->bins]; /* 20110804, Error propagation */
 #ifdef USE_SPCAT_OBJ
   spcs_t spcs;
   char *buffers[NFILE];
@@ -1319,7 +1320,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
       return 11;
     }
     if ( exitCode != 0 ) {
-      printf("SPCAT returned nonzero: [%s] %s: Exit code %d\n", exitCode);
+      printf("SPCAT returned nonzero: [%s] %s: Exit code %d\n",
+             opts->spcatbin, filename, exitCode);
       return 10;
     }
     /* Close process and thread handles. */
@@ -1438,7 +1440,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   for ( i = 0; i < opts->bins; i++ ) {
     obsbin[i] = 0; compbin[i] = 0;
     obsbincount[i] = 0; compbincount[i] = 0;
-    binweights[i] = 0;
+    binweights[i] = 0; binerror[i] = 0;
   }
 
   //double obsmax=0/*, obsmin = 0*/;
@@ -1465,6 +1467,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
         compbincount[bin]++;
         //printf("BW: sqrt(2/%d)\n",entry.qn[0]+entry.qn[3]);
         binweights[bin] += sqrt(2.0/(entry.qn[0]+entry.qn[3])); /* 20110215 */
+        binerror[bin] += entry.error;
       }
     }
   }
@@ -1486,7 +1489,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     float comp = opts->distanceweight *
       powf(fabs(obsbin[i]-compbin[i]),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
-    fitness += comp*binweights[i];
+    fitness += comp*binweights[i]*binerror[i];
   }
 
 #if 0
