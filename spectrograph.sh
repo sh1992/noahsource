@@ -102,6 +102,7 @@ fi
 [ -z "$MATCHTITLE" -a -n "$MATCH" ] && MATCHTITLE=`basename "$MATCH" .cat`
 
 OUT="$BASEFN$EXT"
+FILTER="awk '{print substr(\$0,1,13),substr(\$0,14,8),substr(\$0,22,8)}'"
 echo "$FN" '=>' "$OUT"
 (
 cat <<EOF
@@ -121,7 +122,7 @@ EOF
 cat <<EOF
 set yrange [0:*]
 set key top
-plot "$FN" using 1:(10**(\$3)) with impulses title "$TITLE", 0 lt 0 title ""
+plot "< $FILTER $FN" using 1:(10**(\$3)) with impulses title "$TITLE", 0 lt 0 title ""
 EOF
 [ -n "$MATCH" ] && cat <<EOF
 
@@ -131,7 +132,7 @@ set xtics
 set tmargin 0
 set bmargin -1
 set key bottom
-plot "$MATCH" using 1:(-10**(\$3)) with impulses title "$MATCHTITLE", 0 lt 0 title ""
+plot "< $FILTER $MATCH" using 1:(-10**(\$3)) with impulses title "$MATCHTITLE", 0 lt 0 title ""
 
 unset multiplot
 EOF
