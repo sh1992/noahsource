@@ -55,6 +55,19 @@ int invisible_system(int stdoutfd, int argc, ...);
 
 /* char tempdir[16]; */
 
+/* Transparent compression: Supported compression programs. */
+#define COMP_EXT 0
+#define COMP_APP 1
+char *compressors[][2] = {
+  {"", ""},
+  /* {".Z", "compress"}, */
+  {".gz", "gzip"},
+  {".bz2", "bzip2"},
+  {".lzma", "lzma"},
+  {".xz", "xz"},
+  {NULL, NULL}
+};
+
 /* Use same order as spcat_ext and spcat_efile in spcat-obj.h */
 const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
@@ -109,6 +122,7 @@ typedef struct {
   int linkbc;
   char *distributor;
   char *tempdir;
+  int compress;                 /* Compression mode for output log file */
 } specopts_t;
 
 #ifndef USE_SPCAT_OBJ
@@ -225,7 +239,7 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
     i = fscanf(fh, "%13c%8c%8c%2c%10c%3c%7c%4c%127[^\r\n]", s.freq, s.err,
                s.lgint, s.dr, s.elo, s.gup, s.tag, s.qnfmt, s.qn);
     if ( i == EOF && ferror(fh) ) {
-      printf("Failed to read template file, errno=%d\n", errno);
+      printf("Failed to read CAT file, errno=%d\n", errno);
       return 3;
     }
     else if ( i == EOF ) break;
@@ -448,6 +462,32 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 44: /* tempdir */
     ((specopts_t *)settings->ref)->tempdir = optarg;
     break;
+  case 45: /* compress */
+    {
+      int i;
+      specopts_t *o = (specopts_t *)settings->ref;
+      o->compress = 0;
+      for ( i = 1; compressors[i][0]; i++ ) {
+        if ( !optarg || ( strcmp(compressors[i][COMP_APP], optarg) == 0 ) ||
+                        ( strcmp(compressors[i][COMP_EXT]+1, optarg) == 0 ) ) {
+          o->compress = i;
+          if ( optarg ) break;
+        }
+      }
+      if ( o->compress == 0 ) {
+        if ( optarg ) {
+          if ( strcmp(optarg, "help") )
+            printf("Unknown compression method %s\n", optarg ? optarg : "");
+          printf("Known compression methods:");
+          for ( i = 1; compressors[i][0]; i++ ) {
+            printf(" %s", compressors[i][COMP_APP]);
+          }
+          printf("\n");
+        }
+        exit(1);
+      }
+    }
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -616,6 +656,12 @@ int main(int argc, char *argv[]) {
      * Use DIR for temporary files.
      */
     {"tempdir",    required_argument, 0, 44},
+    /** --compress METHOD
+     *
+     * Use METHOD for compressing files.
+     * For a list of known METHODs, try --compress help.
+     */
+    {"compress",   required_argument, 0, 45},
     {0, 0, 0, 0}
   };
 #ifdef CLIENT_ONLY
@@ -815,26 +861,64 @@ int main(int argc, char *argv[]) {
   if ( !settings.debugmode ) {
     FILE *fh;
     char *filename;
-    int stdoutfd = dup(STDOUT_FILENO); /* Save real STDOUT. */
-    if ( ( filename = malloc(strlen(specopts.basename_out)+5) ) == NULL ) {
+    const char *compressext = compressors[specopts.compress][COMP_EXT];
+    if ( ( filename = malloc(strlen(specopts.basename_out)+15) ) == NULL ) {
       printf("Out of memory (log file)\n");
       exit(1);
     }
-    sprintf(filename, "%s.log", specopts.basename_out);
-    /* Open new STDOUT handle */
-    fflush(NULL);		       /* Flush output streams. */
-    if ( ( fh = freopen(filename, "w", stdout) ) == NULL ) {
+    sprintf(filename, "%s.log%s", specopts.basename_out, compressext);
+    /* Open the log file */
+    if ( ( fh = fopen(filename, "w") ) == NULL ) {
       printf("Failed to open log file, errno=%d\n", errno);
       free(filename);
       exit(1);
     }
     free(filename);
-    dup2(fileno(fh), STDOUT_FILENO); /* Make sure fd #1 is STDOUT */
-    if ( ( settings.stdoutfh = fdopen(stdoutfd, "w") ) == NULL ) {
-      printf("Failed to reopen stdout, errno=%d\n", errno);
-      exit(1);
+    if ( specopts.compress ) {
+      /* Spawn compression process */
+      int pipes[2];
+      int compresspid;
+      if ( pipe(pipes) != 0 ) {
+        printf("Failed to create pipe for compression, errno=%d\n", errno);
+        exit(1);
+      }
+      compresspid = fork();
+      if ( compresspid == -1 ) {
+        printf("Failed for fork for compression, errno=%d\n", errno);
+        exit(1);
+      }
+      else if ( compresspid == 0 ) {
+        char *argv[2] = {compressors[specopts.compress][COMP_APP], NULL};
+        /* Child process */
+        close(pipes[1]);
+        /* Make the file be our STDOUT, and the pipe be our STDIN */
+        if ( dup2(fileno(fh), STDOUT_FILENO) == -1 ) {
+          perror("Failed to set stdin for compressor");
+          exit(1);
+        }
+        if ( dup2(pipes[0], STDIN_FILENO) == -1 ) {
+          perror("Failed to set stdin for compressor");
+          exit(1);
+        }
+        /* XZ aborts on Ctrl-C, doesn't write data. If parent gets Ctrl-C,
+         * we'll get EOF soon enough. */
+        signal(SIGINT, SIG_IGN);
+        /* Execute xz */
+        execvp(argv[0], argv);
+        fprintf(stderr, "Failed to execute compressor %s, errno=%d\n",
+                argv[0], errno);
+        exit(1);
+      }
+      /* Close the log file and dup the pipe to STDOUT instead. */
+      fclose(fh);
+      close(pipes[0]);
+      if ( ( fh = fdopen(pipes[1], "w") ) == NULL ) {
+        printf("Failed to open pipe to compressor, errno=%d\n", errno);
+      }
     }
-    qprintf(&settings, "Details saved in %s.log\n", specopts.basename_out);
+    settings.logfh = fh;
+    qprintf(&settings, "Details saved in %s.log%s\n",
+            specopts.basename_out, compressext);
   }
 #endif
 #ifndef _WIN32
@@ -856,19 +940,19 @@ int main(int argc, char *argv[]) {
   }
 #endif
 #ifndef CLIENT_ONLY
-  printf("%s\n", optlog+1); free(optlog);
+  lprintf(&settings, "%s\n", optlog+1); free(optlog);
 #endif
 
   qprintf(&settings, "Using output file %s\n", specopts.basename_out);
 
   /* Load SPCAT .int & .var input template files */
-  printf("Loading template files %s.{var,int}\n", specopts.template_fn); 
+  lprintf(&settings, "Loading template files %s.{var,int}\n", specopts.template_fn); 
   if ( (rc = load_spec_templates(&specopts)) != 0 ) {
     qprintf(&settings, "load_spec_templates failed: %d\n", rc);
     return rc;
   }
   /* Load observed data file */
-  printf("Loading observation file %s\n", specopts.obsfile);
+  lprintf(&settings, "Loading observation file %s\n", specopts.obsfile);
   if ( (rc = load_spec_observation(&specopts)) != 0 ) {
     qprintf(&settings, "load_spec_observation failed: %d\n", rc);
     return rc;
@@ -876,7 +960,7 @@ int main(int argc, char *argv[]) {
 #ifndef CLIENT_ONLY
   /* Load starting population */
   if ( specopts.popfile ) {
-    printf("Loading inital population %s\n", specopts.popfile);
+    lprintf(&settings, "Loading inital population %s\n", specopts.popfile);
     /* TODO cleanup */
     specopts.popdata = malloc(sizeof(GA_segment)*SEGMENTS*settings.popsize);
     if ( !specopts.popdata ) {
@@ -911,7 +995,7 @@ int main(int argc, char *argv[]) {
 #endif
   /* Load double resonance */
   if ( specopts.drfile ) {
-    printf("Loading double resonances %s\n", specopts.drfile);
+    lprintf(&settings, "Loading double resonances %s\n", specopts.drfile);
     /* TODO cleanup */
     int dblressize = 0;
     //specopts.doubleres = NULL;
@@ -962,7 +1046,7 @@ int main(int argc, char *argv[]) {
     fclose(fh);
   }
 
-  printf("Using %d bins\n", specopts.bins);
+  lprintf(&settings, "Using %d bins\n", specopts.bins);
 
 #ifdef CLIENT_ONLY
   /* Do something */
@@ -1095,7 +1179,7 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-    printf("Starting %d generations\n", settings.generations);
+    lprintf(&settings, "Starting %d generations\n", settings.generations);
     if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
       qprintf(&settings, "GA_evolve failed: %d\n", rc);
       return rc;
@@ -1120,7 +1204,7 @@ int main(int argc, char *argv[]) {
   /* TODO: Free more memory */
   /* Remove temporary files */
   /* printf("rmdir: %d\n", rmdir(tempdir)); */
-  printf("Exiting: %d\n", rc);
+  lprintf(&settings, "Exiting: %d\n", rc);
   return rc;
 }
 

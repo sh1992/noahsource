@@ -82,8 +82,8 @@ typedef struct GA_settings_struct {
   /** If false, assume not in "debug mode", where stdout is redirected
    * to a file, and the real stdout is available in stdoutfd. */
   int debugmode;
-  /** Real stdout if debug mode is not active. \see debugmode */
-  FILE *stdoutfh;
+  /** Log file  if debug mode is not active. \see debugmode */
+  FILE *logfh;
   /** Number of threads to use. */
   int threadcount;
   /** Distributor for distributed algorithm. If NULL, evaluate fitness
@@ -393,12 +393,18 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 /* \} */
 
 /** Print a message both to the stdout and (unless in debug mode) the
- * "real" stdout saved in GA_settings.stdoutfd. Thread-safe in
- * conjunction with tprintf and invisible_system.
+ * logfile. Thread-safe in conjunction with tprintf and invisible_system.
  *
- * \see Ga_settings.debugmode, tprintf, invisible_system
+ * \see GA_settings.debugmode, lprintf, tprintf, invisible_system
  */
 int qprintf(const GA_settings *settings, const char *format, ...);
+
+/** Print a message both to the logfile (or stdout if there is no logfile).
+ *Thread-safe in conjunction with tprintf and invisible_system.
+ *
+ * \see GA_settings.debugmode, qprintf, tprintf, invisible_system
+ */
+int lprintf(const GA_settings *settings, const char *format, ...);
 
 /** Thread-safe regular printf. Thread-safe in conjunction with
  * qprintf and invisible_system.

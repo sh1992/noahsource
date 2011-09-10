@@ -33,6 +33,7 @@ extern int GA_thread_init(GA_thread *thread);
 extern int GA_thread_free(GA_thread *thread);
 
 #define tprintf printf
+#define lprintf qprintf
 int qprintf(const GA_settings *settings, const char *format, ...) {
   va_list ap;
   int rc = 0;

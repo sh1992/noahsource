@@ -58,6 +58,7 @@ int GA_defaultsettings(GA_settings *settings) {
     /* Default debugmode to true, since the infrastructure to renumber
      * file descriptors is not implemented in this library */
     settings->debugmode = 1;
+    settings->logfh = NULL;
     /* Return success */
     return 0;
 }
@@ -661,28 +662,28 @@ static void *GA_do_thread (void * arg) {
         line[0] = 0;
         /* Read result */
         if ( fgets(line, 1024, session->settings->distributor) == NULL ) {
-          printf("Read error from distributor, errno=%d\n", errno);
+          qprintf(session->settings, "Read error from distributor, errno=%d\n", errno);
           return NULL;
         }
         //printf("  %s  at i=%u/%u\n", line, i, nexpected);
         /* DONE signal */
         if ( strncmp(line, "DONE", 4) == 0 ) {
           if ( i == nexpected ) break;
-          printf("Premature DONE while reading from distributor\n");
+          qprintf(session->settings, "Premature DONE while reading from distributor\n");
           return NULL;
         }
         /* Prevent overflow */
         if ( i >= nexpected ) {
-          printf("Didn't recieve DONE while reading from distributor\n");
+          qprintf(session->settings, "Didn't recieve DONE while reading from distributor\n");
           return NULL;
         }
         /* Parse message */
         if ( sscanf(line, "FITNESS %u %lf", &index, &fitness) != 2 ) {
-          printf("Parse error on message %s from distributor\n", line);
+          qprintf(session->settings, "Parse error on message %s from distributor\n", line);
           return NULL;
         }
         if ( index < in || index >= last ) {
-          printf("Invalid index %u from distributor\n", index);
+          qprintf(session->settings, "Invalid index %u from distributor\n", index);
           return NULL;
         }
         session->population[index].fitness = fitness;
@@ -720,7 +721,7 @@ static void display_individual(GA_session *session, unsigned int i,
   }
 
   if ( always ) qprintf(session->settings, "%s\n", str);
-  else printf("%s\n", str);
+  else lprintf(session->settings, "%s\n", str);
   free(str);
 }
 
@@ -827,7 +828,7 @@ int GA_checkfitness(GA_session *session) {
       if ( found > 50 ) return found; /* Error */
       if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
 
-      printf("Got %d %d.\n", j, i);
+      lprintf(session->settings, "Got %d %d.\n", j, i);
 
       /* Track minimum and maximum fitnesses */
       j++;
@@ -858,13 +859,14 @@ int GA_checkfitness(GA_session *session) {
     d = (session->generation < session->settings->dynmut_width) ? -0.693147 : (a-b);
     session->settings->mutationrate = session->settings->dynmut_min +
       exp(-fabs(d))*session->settings->dynmut_range;
-    printf("DYNM %03u AVG %10.3f  A %10.3f  B %10.3f  D %10.3f  R %10.3f\n",
+    lprintf(session->settings,
+           "DYNM %03u AVG %10.3f  A %10.3f  B %10.3f  D %10.3f  R %10.3f\n",
            session->generation, mean, a, b, d,
            session->settings->mutationrate);
   }
-  else printf("DYNM %03u AVG %10.3f\n", session->generation, mean);
+  else lprintf(session->settings, "DYNM %03u AVG %10.3f\n", session->generation, mean);
   /* Show statistics of caching effectiveness */
-  printf("FEVS %u  -%u\n", fevs, j-fevs);
+  lprintf(session->settings, "FEVS %u  -%u\n", fevs, j-fevs);
 
   /* Scale fitnesses to range 0.5-1.0 */
   offset = 0-min;	     /* Shift range for lower bound at zero */
@@ -937,7 +939,7 @@ int GA_checkfitness(GA_session *session) {
     qprintf(session->settings, "               GD %03d %10u\n", j,
 	    session->population[session->fittest].gdsegments[j]);
 #endif
-  printf("\n");
+  lprintf(session->settings, "\n");
   return 0;
 }
 
@@ -1403,9 +1405,9 @@ int qprintf(const GA_settings *settings, const char *format, ...) {
   va_start(ap, format);
   rc = vprintf(format, ap);
   va_end(ap);
-  if ( !settings->debugmode ) {
+  if ( settings->logfh ) {
     va_start(ap, format);
-    rc = vfprintf(settings->stdoutfh, format, ap);
+    rc = vfprintf(settings->logfh, format, ap);
     va_end(ap);
   }
 #if THREADS
@@ -1431,6 +1433,29 @@ int tprintf(const char *format, ...) {
 #endif
   va_start(ap, format);
   rc = vprintf(format, ap);
+  va_end(ap);
+#if THREADS
+  funlockfile(stdout);
+  { /* UNLOCK io */
+    int trc = pthread_mutex_unlock(&GA_iomutex);
+    if ( trc ) { printf("tprintf: mutex_unlock(io): %d\n", trc); exit(1); }
+  }
+#endif
+  return rc;
+}
+
+int lprintf(const GA_settings *settings, const char *format, ...) {
+  va_list ap;
+  int rc = 0;
+#if THREADS
+  { /* LOCK io */
+    int trc = pthread_mutex_lock(&GA_iomutex);
+    if ( trc ) { printf("tprintf: mutex_lock(io): %d\n", trc); exit(1); }
+  }
+  flockfile(stdout);
+#endif
+  va_start(ap, format);
+  rc = vfprintf(settings->logfh ? settings->logfh : stdout, format, ap);
   va_end(ap);
 #if THREADS
   funlockfile(stdout);
