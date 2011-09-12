@@ -55,6 +55,8 @@ int GA_defaultsettings(GA_settings *settings) {
 #else
     settings->threadcount = 1;
 #endif
+    /* Assume caching is acceptable */
+    settings->usecaching = 1;
     /* Default debugmode to true, since the infrastructure to renumber
      * file descriptors is not implemented in this library */
     settings->debugmode = 1;
@@ -144,18 +146,24 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->sorted[i] = i;
   }
   /* Allocate the fitness cache (freed in GA_cleanup) */
-  session->cachesize = 2*settings->popsize;
-  session->fitnesscache = malloc(sizeof(GA_individual *)*session->cachesize);
-  if ( !session->fitnesscache ) return 6;
-  for ( i = 0; i < session->cachesize; i++ ) {
-    session->fitnesscache[i] = malloc(sizeof(GA_individual)*2);
-    if ( !session->fitnesscache[i] ) return 7;
-    memset(session->fitnesscache[i], 0, sizeof(GA_individual)*2);
-    for ( j = 0; j < 2; j++ ) {
-      session->fitnesscache[i][j].segments = malloc(segmentmallocsize);
-      if ( !session->fitnesscache[i][j].segments ) return 8;
-      /* Fitness cache does not store graydecoded segments */
+  if ( settings->usecaching ) {
+    session->cachesize = 2*settings->popsize;
+    session->fitnesscache = malloc(sizeof(GA_individual *)*session->cachesize);
+    if ( !session->fitnesscache ) return 6;
+    for ( i = 0; i < session->cachesize; i++ ) {
+      session->fitnesscache[i] = malloc(sizeof(GA_individual)*2);
+      if ( !session->fitnesscache[i] ) return 7;
+      memset(session->fitnesscache[i], 0, sizeof(GA_individual)*2);
+      for ( j = 0; j < 2; j++ ) {
+        session->fitnesscache[i][j].segments = malloc(segmentmallocsize);
+        if ( !session->fitnesscache[i][j].segments ) return 8;
+        /* Fitness cache does not store graydecoded segments */
+      }
     }
+  }
+  else {
+    session->cachesize = 0;
+    session->fitnesscache = NULL;
   }
   /* Allocate the dynmut buffer (freed in GA_cleanup) */
   session->dynmut_trailing =
@@ -235,7 +243,7 @@ int GA_cleanup(GA_session *session) {
     for ( j = 0; j < 2; j++ ) free(session->fitnesscache[i][j].segments);
     free(session->fitnesscache[i]);
   }
-  free(session->fitnesscache);
+  if ( session->fitnesscache ) free(session->fitnesscache);
   free(session->dynmut_trailing);
   return 0;
 }
@@ -428,6 +436,7 @@ int GA_comparator(const void *a, const void *b) {
 static void GA_cache_fitness(GA_session *session, unsigned int i,
                              unsigned int hashbucket) {
   GA_segment *ptr;
+  if ( !session->fitnesscache ) return;
 #if THREADS
   /* LOCK fitnesscache */
   int j = pthread_mutex_lock(&(session->cachemutex));
@@ -461,6 +470,8 @@ static void GA_cache_fitness(GA_session *session, unsigned int i,
 static unsigned int GA_hash_individual(GA_session *session, unsigned int i) {
   GA_segment hashtemp = 0;
   int j;
+  if ( !session->fitnesscache ) return 0;
+
   for ( j = 0; j < session->population[i].segmentcount; j++ )
     hashtemp ^= session->population[i].segments[j];
   return hashtemp % session->cachesize;
@@ -475,61 +486,63 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   /* Hash the individual to determine caching location */
   unsigned int hashbucket = GA_hash_individual(session, i);
 
-  /* Check in the cache for an earlier computation of the fitness value */
+  if ( session->fitnesscache ) {
+    /* Check in the cache for an earlier computation of the fitness value */
 #if THREADS
-  /* LOCK fitnesscache */
-  j = pthread_mutex_lock(&(session->cachemutex));
-  if ( j ) { qprintf(session->settings,
-		     "GA_dcf: mutex_lock(cache_r): %d\n", j); exit(1); }
+    /* LOCK fitnesscache */
+    j = pthread_mutex_lock(&(session->cachemutex));
+    if ( j ) { qprintf(session->settings,
+		       "GA_dcf: mutex_lock(cache_r): %d\n", j); exit(1); }
 #endif
-  for ( j = 0; j < 2; j++ ) {
-    if ( ( session->fitnesscache[hashbucket][j].unscaledfitness != 0 ) &&
-	 !memcmp(session->population[i].segments,
-		 session->fitnesscache[hashbucket][j].segments,
-		 sizeof(GA_segment)*session->population[i].segmentcount) ) {
-      session->population[i].fitness =
-	session->fitnesscache[hashbucket][j].fitness;
-      found = 1 + j;
-      break;
+    for ( j = 0; j < 2; j++ ) {
+      if ( ( session->fitnesscache[hashbucket][j].unscaledfitness != 0 ) &&
+	   !memcmp(session->population[i].segments,
+		   session->fitnesscache[hashbucket][j].segments,
+		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
+        session->population[i].fitness =
+	  session->fitnesscache[hashbucket][j].fitness;
+        found = 1 + j;
+        break;
+      }
     }
-  }
 #if THREADS
-  /* UNLOCK fitnesscache */
-  j = pthread_mutex_unlock(&(session->cachemutex));
-  if ( j ) { qprintf(session->settings,
-		     "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
+    /* UNLOCK fitnesscache */
+    j = pthread_mutex_unlock(&(session->cachemutex));
+    if ( j ) { qprintf(session->settings,
+		       "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
 #endif
 
 #if 0
-  //!THREADS
-  /* Also check the earlier entries in the new population. Not
-   * threadsafe. */
-  if ( !found ) {
-    for ( j = 0; j < i; j++ ) {
-      if ( !memcmp(session->population[i].segments,
-		   session->population[j].segments,
-		   sizeof(GA_segment)*session->population[i].segmentcount)) {
-	session->population[i].fitness = session->population[j].fitness;
-	found = 5;
-	break;
+    //!THREADS
+    /* Also check the earlier entries in the new population. Not
+     * threadsafe. */
+    if ( !found ) {
+      for ( j = 0; j < i; j++ ) {
+        if ( !memcmp(session->population[i].segments,
+		     session->population[j].segments,
+		     sizeof(GA_segment)*session->population[i].segmentcount)) {
+	  session->population[i].fitness = session->population[j].fitness;
+	  found = 5;
+	  break;
+        }
       }
     }
-  }
 #endif
 
-  /* Also check the old population.  No lock necessary,
-   * oldpop only modified in GA_evolve */
-  if ( !found && session->generation > 0 ) {
-    for ( j = 0; j < session->settings->popsize; j++ ) {
-      if ( !memcmp(session->population[i].segments,
-		   session->oldpop[j].segments,
-		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
-	session->population[i].fitness = session->oldpop[j].unscaledfitness;
-	found = 6;
-	break;
+    /* Also check the old population.  No lock necessary,
+     * oldpop only modified in GA_evolve */
+    if ( !found && session->generation > 0 ) {
+      for ( j = 0; j < session->settings->popsize; j++ ) {
+        if ( !memcmp(session->population[i].segments,
+		     session->oldpop[j].segments,
+		     sizeof(GA_segment)*session->population[i].segmentcount) ) {
+	  session->population[i].fitness = session->oldpop[j].unscaledfitness;
+	  found = 6;
+	  break;
+        }
       }
     }
-  }
+  } /* if fitnesscache */
 
   /* If not found in the cache, compute the fitness value */
   /* memcpy(&founditem, &(session->population[i]), sizeof(GA_individual)); */
@@ -643,16 +656,17 @@ static void *GA_do_thread (void * arg) {
         }
         else { /* Send to distributor */
           unsigned int j;
-          fprintf(session->settings->distributor, "ITEM %d", i);
+          fprintf(session->settings->distributor, "I %u", i);
           for ( j = 0; j < session->population[i].segmentcount; j++ ) {
-            fprintf(session->settings->distributor, " %u",
+            fprintf(session->settings->distributor, " %x",
                     session->population[i].gdsegments[j]);
           }
           fprintf(session->settings->distributor, "\n");
           nexpected++;
         }
       }
-      fprintf(session->settings->distributor, "DISPATCH\n");
+      fprintf(session->settings->distributor, "G %u\nDISPATCH\n",
+              session->generation);
       fflush(session->settings->distributor);
       /* Read results from the distributor and dispatch appropriately */
       i = 0;
@@ -678,7 +692,7 @@ static void *GA_do_thread (void * arg) {
           return NULL;
         }
         /* Parse message */
-        if ( sscanf(line, "FITNESS %u %lf", &index, &fitness) != 2 ) {
+        if ( sscanf(line, "F %u %lf", &index, &fitness) != 2 ) {
           qprintf(session->settings, "Parse error on message %s from distributor\n", line);
           return NULL;
         }

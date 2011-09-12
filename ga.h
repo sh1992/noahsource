@@ -86,6 +86,8 @@ typedef struct GA_settings_struct {
   FILE *logfh;
   /** Number of threads to use. */
   int threadcount;
+  /** Allow caching. Set to false if fitness metric varies over time. */
+  int usecaching;
   /** Distributor for distributed algorithm. If NULL, evaluate fitness
    * locally. */
   FILE *distributor;

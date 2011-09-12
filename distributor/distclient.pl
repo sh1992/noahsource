@@ -524,7 +524,7 @@ sub GASpecWork {
     foreach my $srcfn ( $conffile, $popfile ) {
         open IN, '<', $srcfn or return WorkFail($id, "Failed to read $srcfn");
         while ( <IN> ) {
-            $nitems++ if m/^ITEM/;
+            $nitems++ if m/^I /;
             print $fh $_;
         }
     }
@@ -571,7 +571,7 @@ sub GASpecWork {
         #print "$id Reading\n";
         while ( <SPEC> ) {
             #print "$id $_"; # FIXME: Do something with these messages
-            if ( m/^FITNESS/ ) {
+            if ( m/^F / ) {
                 $i++;
                 PostStatus($id, progress => $i);
             }

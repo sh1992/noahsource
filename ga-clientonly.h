@@ -25,7 +25,7 @@ typedef struct GA_individual_struct {
   double fitness;
 } GA_individual;
 typedef struct { void *ref; } GA_settings;
-typedef struct { GA_settings *settings; } GA_session;
+typedef struct { GA_settings *settings; unsigned int generation; } GA_session;
 typedef struct { void *ref; GA_session *session; } GA_thread;
 
 extern int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem);

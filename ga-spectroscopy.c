@@ -110,6 +110,8 @@ typedef struct {
   char template[2][2048];	/* Input file template */
   int userange[SEGMENTS];
   int rangetemp[SEGMENTS];
+  int initialerror[SEGMENTS];
+  float errordecay;
   GA_segment rangemin[SEGMENTS];
   GA_segment rangemax[SEGMENTS];
   char *popfile;
@@ -324,6 +326,7 @@ int load_spec_observation(specopts_t *opts) {
 }
 
 #ifdef USE_SPCAT_OBJ
+#error Not updated for new template format
 int generate_input_buffers(specopts_t *opts, char *buffers[], size_t bufsizes[], GA_segment *x) {
   int i;
   for ( i = 0; i < 2; i++ ) {
@@ -333,26 +336,99 @@ int generate_input_buffers(specopts_t *opts, char *buffers[], size_t bufsizes[],
   return 0;
 }
 #else
-int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
+int generate_input_files(specopts_t *opts, unsigned int generation,
+                         char *basename, GA_segment *x) {
   char filename[128];
   int i;
+  /* Render DJK to strings */
+  char djkstr[5][16];
+  for ( i = 0; i < 5; i++ ) {
+    GA_segment v = x[3+i];
+    const int zero = ~(1<<(GA_segment_size-1)); // (0xfff...fff)/2
+    sprintf(djkstr[i], "%s%u", (v>0)?"-":"",
+            (v > zero) ? (v-zero) : (zero-v));
+  }
+  /* Output data files */
   for ( i = 0; i < 2; i++ ) {
     FILE *fh;
-    int j;
-    char djkstr[5][16];
+    int oldj = 0, j = 0, parsemode = 0;
     snprintf(filename, sizeof(filename), "%s.%s", basename,
 	     input_suffixes[i]);
     if ( ( fh = fopen(filename, "w") ) == NULL ) {
       printf("Failed to open input file, errno=%d\n", errno);
       return i+1;
     }
-    // 
-    for ( j = 0; j < 5; j++ ) {
-      GA_segment v = x[3+j];
-      const int zero = ~(1<<(GA_segment_size-1)); // (0xfff...fff)/2
-      sprintf(djkstr[j], "%s%u", (v>0)?"-":"",
-              (v > zero) ? (v-zero) : (zero-v));
+    for ( j = 0; /* None, uses break */; j++ ) {
+      char c = opts->template[i][j];
+      if ( ( c == '%' ) || ( c == 0 ) ) {
+        int nitems = j-oldj;
+        if ( parsemode == 0 ) {
+          /* Write the data out directly */
+          if ( nitems ) {
+            size_t rc = fwrite(opts->template[i]+oldj, 1, nitems, fh);
+            if ( rc != nitems ) {
+              printf("template: Write failed (tried to write %d, rc=%d)\n", nitems, rc);
+              return i+1;
+            }
+          }
+          parsemode = 1;
+        }
+        else {
+          /* Parse the data as an escape */
+          if ( nitems <= 0 ) {
+            /* %% means a plain % sign */
+            if ( fputc('%', fh) == EOF ) {
+              printf("template: Write failed (tried to write %%, got error)\n");
+              return i+1;
+            }
+          }
+          else {
+            /* Named escape, extract it */
+            char escape[8], type;
+            int index = 0;
+            memset(escape, 0, sizeof(escape));
+            if ( nitems > 7 || nitems < 1 ) {
+              printf("template: Named escape is too long or too short\n");
+              return i+1;
+            }
+            strncpy(escape, opts->template[i]+oldj, nitems);
+            index = atoi(escape+1);
+            type = escape[0];
+            if ( type == 'g' ) {
+              /* Render field properly in exp-notation */
+              if ( index == 0 ) /* A */
+                fprintf(fh, "%uE-05", x[0]);
+              else if ( index == 1 ) /* B */
+                fprintf(fh, "%uE-05", opts->linkbc?((x[1]+x[2])/2):x[1]);
+              else if ( index == 2 ) /* C */
+                fprintf(fh, "%uE-05", opts->linkbc?((x[1]-x[2])/2):x[2]);
+              else if ( index < SEGMENTS ) /* DJ, DJK, DK, delJ, delK */
+                fprintf(fh, "%sE-10", djkstr[index-3]);
+              else {
+                printf("template: Index too large %d\n", index);
+                return i+1;
+              }
+              /* FIXME: Error checking for fprintf? */
+            }
+            else if ( type == 'e' ) {
+              /* FIXME: Error handling within gaspec */
+              if ( opts->initialerror[index] && opts->errordecay != 0 ) {
+                fprintf(fh, "%g", 1e-5*powf(opts->errordecay, generation)*opts->initialerror[index]);
+              }
+              else fprintf(fh, "0");
+            }
+            else {
+              printf("template: Unknown escape type %c\n", type);
+              return i+1;
+            }
+          }
+          parsemode = 0;
+        }
+        oldj = j+1;
+        if ( c == 0 ) break; /* End of template */
+      }
     }
+#if 0
     fprintf(fh, opts->template[i], x[0] /* A */,
             opts->linkbc?((x[1]+x[2])/2):x[1] /* B */,
             opts->linkbc?((x[1]-x[2])/2):x[2] /* C */,
@@ -361,6 +437,7 @@ int generate_input_files(specopts_t *opts, char *basename, GA_segment *x) {
     //B+C/B-C
     //fprintf(fh, opts->template[i], x[0], (x[1]+x[2])/2, (x[1]-x[2])/2); /* FIXME */
     /* Error checking for fprintf? */
+#endif
     if ( fclose(fh) ) {
       printf("Failed to close input file, errno=%d\n", errno);
       return i+1;
@@ -487,6 +564,9 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
         exit(1);
       }
     }
+    break;
+  case 46: /* errordecay */
+    ((specopts_t *)settings->ref)->errordecay = atof(optarg);
     break;
   default:
     printf("Aborting: %c\n",c);
@@ -662,10 +742,16 @@ int main(int argc, char *argv[]) {
      * For a list of known METHODs, try --compress help.
      */
     {"compress",   required_argument, 0, 45},
+    /** --errordecay FLOAT
+     *
+     * Decay the error estimate for SPCAT at rate FLOAT
+     */
+    {"errordecay", required_argument, 0, 46},
     {0, 0, 0, 0}
   };
 #ifdef CLIENT_ONLY
   FILE *config;
+  unsigned int generation = 0;
 #else
   char *my_optstring = "o:t:m:b:S:w:P:";
   char *optlog = malloc(128);	/* Initial allocation */
@@ -693,7 +779,8 @@ int main(int argc, char *argv[]) {
   specopts.distanceweight = 1.0;
   for ( i = 0; i < SEGMENTS; i++ )
     specopts.userange[i] = specopts.rangetemp[i] = specopts.rangemin[i] =
-      specopts.rangemax[i] = 0;
+      specopts.rangemax[i] = specopts.initialerror[i] = 0;
+  specopts.errordecay = 0;
   specopts.popfile = NULL;
   specopts.drfile = NULL;
   specopts.doubleres = NULL;
@@ -741,8 +828,8 @@ int main(int argc, char *argv[]) {
       }
       else break;
     }
-    /* Check VERSION field */
-    if ( sscanf(line, "VERSION %s", key) != 1 ) {
+    /* Check V (version) field */
+    if ( sscanf(line, "V %s", key) != 1 ) {
       printf("Version tag is missing from configuration.\n");
       exit(1);
     }
@@ -751,6 +838,15 @@ int main(int argc, char *argv[]) {
     }
     else if ( strcmp(key, CHECKSUM) != 0 ) {
       printf("Configuration version %s is incorrect.\n", key);
+      exit(1);
+    }
+    /* Load generation number */
+    if ( my_getline(&line, &linelen, config) <= 0 ) {
+      printf("No generation number in configuration: Read error\n");
+      exit(1);
+    }
+    if ( sscanf(line, "G %u", &generation) != 1 ) {
+      printf("No generation number in configuration: Parse error\n");
       exit(1);
     }
     free(line);
@@ -771,6 +867,11 @@ int main(int argc, char *argv[]) {
       printf("Minimum range may not be greater than maximum range.\n");
       exit(1);
     }
+  }
+
+  if ( specopts.errordecay != 0 ) {
+    /* Do not enable caching if error decays */
+    settings.usecaching = 0;
   }
 
   /* Connect to distributor */
@@ -816,10 +917,16 @@ int main(int argc, char *argv[]) {
       printf("Could not open socket handle, errno=%d\n", errno);
       exit(1);
     }
-    fprintf(settings.distributor, "%s\nVERSION %s\n", optlog+1, CHECKSUM);
+    fprintf(settings.distributor, "%s\nV %s\n", optlog+1, CHECKSUM);
     settings.threadcount = 1;
   }
 #endif /* not CLIENT_ONLY */
+
+  /* Initialize error */
+  for ( i = 0; i < SEGMENTS; i++ ) {
+    if ( specopts.userange[i] )
+      specopts.initialerror[i] = (specopts.rangemax[i]-specopts.rangemin[i])/4;
+  }
 
   /* Initialize observation storage */
   specopts.observation = NULL;
@@ -1060,6 +1167,7 @@ int main(int argc, char *argv[]) {
     GA_session ga;
     GA_thread thread;
     ga.settings = &settings;
+    ga.generation = generation;
     thread.session = &ga;
     thread.ref = NULL;
     rc = GA_thread_init(&thread);
@@ -1070,7 +1178,7 @@ int main(int argc, char *argv[]) {
     /* Load population from config file */
     while ( my_getline(&line, &linelen, config) > 0 ) {
       unsigned int index, offset; char *subline = line;
-      int rc = sscanf(line, "ITEM %u%n", &index, &offset);
+      int rc = sscanf(line, "I %u%n", &index, &offset);
       /* Handle this item */
       if ( rc < 1 ) {
         printf("Not an item: %s", line);
@@ -1092,7 +1200,7 @@ int main(int argc, char *argv[]) {
       /* Load segments */
       for ( i = 0; i < SEGMENTS; i++ ) {
         subline += offset;
-        rc = sscanf(subline, "%u%n", &(pop[pos].indiv.gdsegments[i]), &offset);
+        rc = sscanf(subline, "%x%n", &(pop[pos].indiv.gdsegments[i]), &offset);
         if ( rc < 1 ) {
           printf("Item parse failure: %s", line);
           exit(1);
@@ -1106,9 +1214,9 @@ int main(int argc, char *argv[]) {
       while ( my_getline(&line, &linelen, outfile) > 0 ) {
         char linecheck[4]; unsigned int index;
         /* Try to read a line from the file */
-        if ( ( sscanf(line, "FITNESS %u %lf %3s", &index,
+        if ( ( sscanf(line, "F %u %lf %1s", &index,
                       &(pop[ncompleted].indiv.fitness), linecheck) != 3 ) ||
-              ( strcmp(linecheck, "EOL") != 0 ) ) break;
+              ( strcmp(linecheck, "E") != 0 ) ) break;
         if ( index != pop[ncompleted].index ) {
           printf("Output file (%u) does not match config (%u) at line %u\n",
                  index, pop[ncompleted].index, ncompleted+1);
@@ -1135,9 +1243,9 @@ int main(int argc, char *argv[]) {
           exit(1);
         }
       }
-      printf("FITNESS %04d %f EOL\n", pop[pos].index, pop[pos].indiv.fitness);
+      printf("F %04d %f E\n", pop[pos].index, pop[pos].indiv.fitness);
       fflush(stdout);
-      fprintf(outfile, "FITNESS %04d %f EOL\n",
+      fprintf(outfile, "F %04d %f E\n",
               pop[pos].index, pop[pos].indiv.fitness);
       fflush(outfile);
     }
@@ -1253,7 +1361,7 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
     fprintf(fh, "\n");
     if ( p == ga->fittest ) {
       /* Generate SPCAT input file */
-      rc = generate_input_files(opts, opts->basename_out, x);
+      rc = generate_input_files(opts, ga->generation, opts->basename_out, x);
       if ( rc != 0 ) {
         qprintf(ga->settings,
                 "finished_generation generate_input_files failed: %d\n", rc);
@@ -1359,7 +1467,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /******** FIXME TODO NEED TO SORT ********/
 #else
   /* Generate SPCAT input file */
-  rc = generate_input_files(opts, thrs->basename_temp, x);
+  rc = generate_input_files(opts, ga->generation, thrs->basename_temp, x);
   if ( rc != 0 ) return rc;
 
   /* Run SPCAT. Append a '.' to the end of the filename so that it
@@ -1544,6 +1652,9 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
         //if ( i == 0 || entry.b > obsmax ) obsmax = entry.b;
       }
       else {
+        /* Skip peaks that are too imprecise to bin. 20110910 */
+        /* Unfortunately, we need to skip many fewer peaks. */
+        if ( entry.error > binsize*10 ) continue;
         //double weight = fabs(entry.b/obsmax);
         //if ( weight < 1 ) weight = 1;
         /* Prediction - scale me */

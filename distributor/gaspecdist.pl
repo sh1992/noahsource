@@ -59,7 +59,7 @@ my %socks = ();             # Sockets (and GA processes)
 my @items = ();             # GA Individuals
 my @freeitems = ();         # List of free indexes for @items
 my $askingforworkers = 0;
-my $wucount = 0;
+my $uniqclientid = 0;
 
 #threads->create(\&mythread);
 mythread();
@@ -127,7 +127,7 @@ sub mythread {
                                         next;
                                     }
                                     elsif ( $fatal ) { print $l; next }
-                                    next unless $l =~ m/^FITNESS (\d+) (\S+) EOL/;
+                                    next unless $l =~ m/^F (\d+) (\S+) E/;
                                     my ($item, $fitness) = ($1, $2);
                                     next unless $items[$item]{workunit} eq $reply->{id};
                                     $items[$item]{fitness} = $fitness;
@@ -136,7 +136,7 @@ sub mythread {
                                     if ( !defined($source) || $source < 0 )
                                         { warn "No gasock" }
                                     $gasock = $socks{$source}{sock};
-                                    printf $gasock "FITNESS %d %s\n",
+                                    printf $gasock "F %d %s\n",
                                         $items[$item]{origindex},
                                         $items[$item]{fitness};
                                     $items[$item] = undef;
@@ -190,7 +190,9 @@ sub mythread {
             elsif ( $sock eq $galisten ) {
                 my $client = $sock->accept();
                 my $id = fileno($client);
+                $uniqclientid++;
                 $socks{$id} = { id => $id, sock => $client, buf => '',
+                                uniqid => $uniqclientid,
                                 config => undef, configfile => undef,
                                 files => [], workerspeed => {} };
                 $select->add($client);
@@ -223,8 +225,8 @@ sub HandleSocket {
     my ($id) = @_;
     while ( $socks{$id}{buf} =~ s/^(.*?)\r*\n// ) {
         my $l = $1;
-        print "G$id: $l\n" unless $l =~ m/^ITEM/;
-        if ( $l =~ m/^VERSION .+$/ ) {
+        print "G$id: $l\n" unless $l =~ m/^I /;
+        if ( $l =~ m/^V .+$/ ) {
             $socks{$id}{config} .= "$l\n";
             # Save config to file
             (my $fh, $socks{$id}{configfile}) =
@@ -237,7 +239,11 @@ sub HandleSocket {
             push @{$socks{$id}{files}},
                          [$checksum, "$TEMPURL/$fn", "$REMOTETEMPDIR/$fn"];
         }
-        elsif ( $l =~ m/^ITEM (\d+) (.+)$/ ) {
+        elsif ( $l =~ m/^G (\d+)/ ) {
+            $socks{$id}{gen} = $1;
+            $socks{$id}{wucount} = 'a';
+        }
+        elsif ( $l =~ m/^I (\d+) (.+)$/ ) {
             my ($origindex, $values) = ($1, $2);
             AppendItem({source => $id, origindex => $origindex, workunit => '',
                         values => $values, fitness => undef});
@@ -326,10 +332,6 @@ sub GetNextIndividual {
 sub SendWork {
     my ($worker) = @_;
 
-    # Generate workunit ID
-    $wucount++;
-    my $wuid = "$DISPATCHID-$wucount";
-
     # Find an individual we can dispatch
     my $i = GetNextIndividual(-1, -1);
     return if $i < 0; # No work available
@@ -340,15 +342,19 @@ sub SendWork {
             $ws->{$worker->{id}} : 10/$WUDURATION;
     $n *= $WUDURATION;
 
+    # Generate workunit ID
+    $socks{$client}{wucount}++;
+    my $wuid = "$DISPATCHID-$socks{$client}{uniqid}-$socks{$client}{gen}$socks{$client}{wucount}";
+
     # Generate our workunit population
-    my $popfile = '';
+    my $popfile = "G $socks{$client}{gen}\n";
     my $c = 0; #my @wuitems = ();
     do {
         last if $i < 0;
         $items[$i]{sent}++;
         $items[$i]{workunit} = $wuid; # FIXME: Multi-dispatched?
         $c++; #push @wuitems, $i;
-        $popfile .= "ITEM $i $items[$i]{values}\n";
+        $popfile .= "I $i $items[$i]{values}\n";
     } while ( $c < $n and ($i = GetNextIndividual($client, $i)) > -1 );
 
     my $checksum = Digest::MD5::md5_hex($popfile);
@@ -386,7 +392,7 @@ sub SendWork {
 sub AssignItem {
     my ($item, $worker) = @_;
     $items[$item]{sent}++;
-    return sprintf("ITEM %d %s", $item, $items[$item]{values});
+    return sprintf("I %d %s", $item, $items[$item]{values});
 }
 
 # Let us try to send some items out
