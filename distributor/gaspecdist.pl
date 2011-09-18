@@ -241,7 +241,7 @@ sub HandleSocket {
         }
         elsif ( $l =~ m/^G (\d+)/ ) {
             $socks{$id}{gen} = $1;
-            $socks{$id}{wucount} = 'a';
+            $socks{$id}{wucount} = 'aaa';
         }
         elsif ( $l =~ m/^I (\d+) (.+)$/ ) {
             my ($origindex, $values) = ($1, $2);
@@ -343,8 +343,9 @@ sub SendWork {
     $n *= $WUDURATION;
 
     # Generate workunit ID
+    my $wuid = sprintf("%s-%04d-%04d%s", $DISPATCHID, $socks{$client}{uniqid},
+                       $socks{$client}{gen}, $socks{$client}{wucount});
     $socks{$client}{wucount}++;
-    my $wuid = "$DISPATCHID-$socks{$client}{uniqid}-$socks{$client}{gen}$socks{$client}{wucount}";
 
     # Generate our workunit population
     my $popfile = "G $socks{$client}{gen}\n";

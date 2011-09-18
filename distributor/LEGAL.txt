@@ -1,50 +1,81 @@
 TERMS OF USE AND PRIVACY POLICY
 
-1. DEFINITIONS
+THIS LEGAL AGREEMENT which covers your use of the Distributed Computing Client software package and associated services, accessories, and documentation ("THE SOFTWARE"). PLEASE READ THE ENTIRE AGREEMENT CAREFULLY, AS IT AFFECTS YOUR LEGAL RIGHTS.
 
-"IT" and "ITS" refer to the software package to which this license applies.
+I. DEFINITIONS
 
-"YOU" and "YOUR" refer to the entity receiving said software package.
+a) "You" and "Your" refer to you, the licensee.
 
-"WE", "US", and "OUR" refer to the entity originating said software package.
+b) "We", "Us", and "Our" refer to us, the licensor.
 
-"REASONABLE" shall be defined at OUR sole discretion. Such definition is subject to change without notice.
+II. ACCEPTANCE OF TERMS
 
-"INFORMATION" refers collectively to personally identifiable and non-personally identifiable information.
+By installing or using THE SOFTWARE, You indicate Your acceptance of these terms. If you do not accept these terms, do not install or use THE SOFTWARE, and destroy any copies you have in your possession. These terms may be revised from time to time without notice, and such revisions shall be effective immediately, unless otherwise specified in writing. Your continued use of THE SOFTWARE will signify Your acceptance of the revised terms.
 
-2. ACCEPTANCE OF TERMS
+III. GRANT OF LICENSE
 
-By installing or using IT, YOU denote YOUR acceptance of these terms. If you do not accept these terms, do not install or use IT, and destroy any copies of IT you have in your possession.
+This license grants You a limited nonexclusive license to install and use THE SOFTWARE on an unlimited number computers, provided You are not otherwise restricted from installing or using THE SOFTWARE on such computers, and subject to the following conditions:
 
-2. GRANT OF LICENSE
+a) You may not use THE SOFTWARE except for its intended purpose.
 
-This license grants YOU a limited nonexclusive license to install and use IT on an unlimited number computers, provided YOU are not otherwise restricted from installing or using IT on said computers, subject to the following conditions:
+b) You may not tamper with the operation of THE SOFTWARE or any of its components, including, but not limited to, the transmission of invalid information using the associated services.
 
-    i) YOU may not use IT outside of its intended purpose.
-    ii) YOU may not tamper with the operation of IT or its components.
+IV. REASONABLE USE
 
-3. USE OF RESOURCES
+The definitions of "Reasonable" and "Unreasonable" shall be determined at OUR sole discretion. Such definitions are subject to change at any time without notice.
 
-IT may elect to consume certain resources of YOUR computer, which may include
+V. USE OF RESOURCES
 
-    i) CPU processing time,
-    ii) network and internet bandwidth,
-    iii) storage and memory capacity,
-    iv) or any other available resource not listed here.
+THE SOFTWARE may elect to consume certain resources of the computer, which may include
 
-By installing this software, YOU grant permission for IT to use these resources in any REASONABLE manner until YOU remove IT from your computer.
+a) CPU processing time,
 
-4. PRIVACY POLICY
+b) network and internet bandwidth,
 
-Subject to YOUR acceptance of these terms, IT may collect INFORMATION of a REASONABLE nature, and use collected INFORMATION in a REASONABLE manner. YOU agree to grant US a non-revocable, non-exclusive, royalty-free, world-wide, perpetual license for US to use, modify, publish, et cetera all collected INFORMATION in any media, form, or format now known or hereafter developed, for any REASONABLE purpose.
+c) storage and memory capacity,
 
-5. DISCLAIMER OF WARRANTY AND LIABILITY
+d) audio, visual, and biometric inputs,
 
-IT IS PROVIDED TO YOU "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL WE, OR ANY ENTITY OTHER THAN YOU, BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF IT, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+e) or any other available resource not listed here.
 
-6. ADDITIONAL NOTICES
+By installing this software, You grant permission for THE SOFTWARE to use any or all of these resources in any Reasonable manner until YOU remove THE SOFTWARE from the computer.
 
-Some versions of IT include wxWidgets. http://www.wxwidgets.org/
+VI. PRIVACY POLICY
 
-Some versions of IT include Strawberry Perl. http://strawberryperl.com/
+Subject to Reasonable prudence and Your acceptance of these terms, THE SOFTWARE may collect and use personally identifiable and non-personally identifiable information ("Collected Information") gathered from the computer resources. YOU agree to grant US a non-revocable, non-exclusive, royalty-free, world-wide, perpetual license for US to use, modify, publish, et cetera the Collected Information in any media, form, or format now known or hereafter developed.
+
+VII. EXPORT
+
+Some versions of THE SOFTWARE may contain strong encryption, and are not intended for use in jurisdictions where encryption is regulated and/or prohibited. The export of THE SOFTWARE to certain counties, including Cuba, Iran, North Korea, Sudan, and Syria, may be prohibited by law.
+
+VIII. DISCLAIMER OF WARRANTY AND LIABILITY
+
+THE SOFTWARE IS PROVIDED TO YOU "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL WE OR OUR AGENTS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+THE SOFTWARE is not intended for use in any nuclear, aviation, mass transit, medical, or other inherently dangerous applications.
+
+IX. ARBITRATION
+
+Any dispute between You and Us arising from this Agreement or the use of THE SOFTWARE shall be immediately quashed by Us in a Reasonable manner including, but not limited to, submersion in paperwork. YOU HEREBY KNOWINGLY, VOLUNTARILY, AND INTENTIONALLY WAIVE THE RIGHT TO TRIAL BY JURY WITH RESPECT TO ANY ACTION, CLAIM, SUIT, OR PROCEEDING ARISING OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THIS AGREEMENT.
+
+X. AGREEMENT TERMS
+
+This Agreement constitutes the entire agreement of the parties and supersedes all prior communications, understandings, and agreements relating to the subject matter hereof, whether oral or written. This Agreement and its Exhibits constitute the final, complete, and exclusive statement of the agreement of the parties with respect to the subject matter thereof.
+
+If any provision of this Agreement is deemed unlawful, void, or unenforceable, the remainder of the terms shall remain in effect.
+
+Our failure to enforce any provision of this Agreement shall not be interpreted as a waiver of any of Our rights, and that those rights shall still be available to Us.
+
+If a translation of this Agreement is provided, it is for Your convenience only. If there is any inconsistency between the
+English-language and the translated versions of the Agreement, the English-language version shall take precedence.
+
+XI. THIRD-PARTY SOFTWARE
+
+THE SOFTWARE may be accompanied by third-party software which might be subject to additional license terms.
+
+a) Some versions of THE SOFTWARE include wxWidgets. http://www.wxwidgets.org/
+
+b) Some versions of THE SOFTWARE include Perl. http://www.perl.org/
+
+c) Some versions of THE SOFTWARE include Python, which is provided under the terms of the Python Software License. http://www.python.org/ 
 

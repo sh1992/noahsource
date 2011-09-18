@@ -37,6 +37,7 @@ if ( open F, '<', $serverconffn ) {
     my $obj = eval { from_json($buf) } || {};
     if ( exists($obj->{host}) ) { $HOST = $obj->{host} }
     if ( exists($obj->{port}) ) { $PORT = $obj->{port} }
+    close F;
 }
 if ( !$HOST || !$PORT ) {
     die "Could not load server configuration";

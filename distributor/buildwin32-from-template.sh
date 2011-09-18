@@ -4,7 +4,7 @@
 #
 # It's like buildwin32.pl, but doesn't recompute the Perl dependencies
 
-BIN=distclient-template-win32-20110506.tar.xz
+BIN=distclient-template-win32-20110918.tar.xz
 URL=http://students.ncf.edu/noah.anderson/spec/$BIN
 
 set -e
