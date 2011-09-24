@@ -125,7 +125,9 @@ sub OnButton {
 sub OnThreadCallback {
     my ($self, $event, $threads) = @_;
     @_ = (); # Avoid "Scalars leaked" error, see Wx::Thread.
-    my $status = $event->GetData();
+    # my $status = $event->GetData();
+    my $status = {};
+    { lock @main::events; $status = pop @main::events }
     my $thread = $status->{thread} || 0;
 
     if ( ($status->{mode}||'') eq 'STOPPING' )
@@ -139,6 +141,11 @@ sub OnThreadCallback {
         $progress->SetRange($status->{range}) if defined($status->{range});
         $progress->SetValue($status->{progress});
     } else { $progress->SetValue(0) }
+
+    # Debugging
+    $str = "t".($status->{thread}||0)." is $status->{mode}";
+    $str .= sprintf(" (%03d)",$status->{progress}) if exists($status->{progress});
+    print length($str).":'$str'\n";
 }
 
 sub OnAbout {
@@ -224,15 +231,19 @@ our $THREADCOUNT; # FIXME
 if ( ! do 'distclient.pl' ) {
     Wx::MessageBox("An error occurred while starting up.\nPlease reinstall the application.\n\n$@\n$!", $main::NAME, wxOK|wxICON_ERROR);
     exit 0;
+    # Avoid only-used-once warning (never run)
+    our ($SERVERNAME,$SERVERDETAIL) = ('','');
 }
 
 our $FRAME = undef;
 our $THREAD_EVENT : shared = Wx::NewEventType;
 my $app = MyApp->new;
 
+our @events :shared = ();
 our $statusposter = sub {
     my ($result) = @_;
-    my $event = new Wx::PlThreadEvent(-1, $THREAD_EVENT, $result);
+    { lock(@events); push @events, $result }
+    my $event = new Wx::PlThreadEvent(-1, $THREAD_EVENT, 0); # $result);
     Wx::PostEvent($FRAME, $event) if $FRAME;
 };
 StartClient();
