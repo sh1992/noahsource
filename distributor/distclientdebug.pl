@@ -37,8 +37,11 @@ while ( 1 ) {
         $status = shift @events;
     }
     last unless $status;
-    use JSON;
-    print to_json($status),"\n";
+    #use JSON;
+    #print to_json($status),"\n";
+    my $str = "t".($status->{thread}||0)." is $status->{mode}";
+    $str .= sprintf(" (%03d)",$status->{progress}) if exists($status->{progress});
+    print length($str).":'$str'\n";
 }
 
 OnExit();
