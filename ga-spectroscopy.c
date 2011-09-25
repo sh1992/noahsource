@@ -1428,6 +1428,14 @@ int bin_comparator(const void *a, const void *b) {
   else return 0; /* x-y; */	/* If equal sort by index to preserve order */
 }
 
+
+int peak_error_comparator(const void *a, const void *b) {
+  datarow *x = (datarow *)a, *y = (datarow *)b;
+  if ( x->error < y->error ) return -1;
+  else if ( x->error > y->error ) return 1;
+  else return 0; /* x-y; */	/* If equal sort by index to preserve order */
+}
+
 int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   specthreadopts_t *thrs = (specthreadopts_t *)thbuf;
@@ -1635,34 +1643,54 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     binweights[i] = 0; binerror[i] = 0;
   }
 
+  /* Compute error tolerance - 20110925 */
+  float errtol = binsize*10;
+  {
+    /* Find the 25 most precise peaks */
+    qsort(thrs->compdata, thrs->compdatacount, sizeof(datarow), peak_error_comparator);
+    for ( j = 0; j < thrs->compdatacount; j++ ) {
+      datarow *entry = &thrs->compdata[j];
+      if ( ( entry->frequency < opts->obsrangemin ) ||
+           ( entry->frequency > opts->obsrangemax ) )
+        continue;
+      j++;
+      if ( j > 24 ) break;
+    }
+    if ( i >= thrs->compdatacount ) i = thrs->compdatacount-1;
+    if ( i >= 0 ) {
+      if ( thrs->compdata[i].error > errtol ) errtol = thrs->compdata[i].error;
+    }
+  }
+
   //double obsmax=0/*, obsmin = 0*/;
   for ( j=0;j<=1;j++ ) {	/* 0=Observed / 1=Generated */
     for ( i=0; i<((j==0)?opts->observationcount:thrs->compdatacount); i++ ) {
-      datarow entry;
-      if ( j == 0 ) entry = opts->observation[i]; /* Observed */
-      else entry = thrs->compdata[i]; /* Generated */
-      if ( ( entry.frequency < opts->obsrangemin ) || ( entry.frequency > opts->obsrangemax ) )
+      datarow *entry;
+      if ( j == 0 ) entry = &opts->observation[i]; /* Observed */
+      else entry = &thrs->compdata[i]; /* Generated */
+      if ( ( entry->frequency < opts->obsrangemin ) ||
+           ( entry->frequency > opts->obsrangemax ) )
         continue;
       /* We're within the valid range */
-      int bin = floor((entry.frequency-opts->obsrangemin)/binsize);
+      int bin = floor((entry->frequency-opts->obsrangemin)/binsize);
       if ( bin >= opts->bins ) bin = opts->bins-1;
       if ( j == 0 ) {
-        obsbin[bin] += entry.intensity;
+        obsbin[bin] += entry->intensity;
         obsbincount[bin]++;
         //if ( i == 0 || entry.b > obsmax ) obsmax = entry.b;
       }
       else {
         /* Skip peaks that are too imprecise to bin. 20110910 */
         /* Unfortunately, we need to skip many fewer peaks. */
-        if ( entry.error > binsize*10 ) continue;
+        if ( entry->error > errtol ) continue;
         //double weight = fabs(entry.b/obsmax);
         //if ( weight < 1 ) weight = 1;
         /* Prediction - scale me */
-        compbin[bin] += entry.intensity;//*weight;
+        compbin[bin] += entry->intensity;//*weight;
         compbincount[bin]++;
         //printf("BW: sqrt(2/%d)\n",entry.qn[0]+entry.qn[3]);
-        binweights[bin] += sqrt(2.0/(entry.qn[0]+entry.qn[3])); /* 20110215 */
-        binerror[bin] += entry.error;
+        binweights[bin] += sqrt(2.0/(entry->qn[0]+entry->qn[3])); /* 20110215 */
+        binerror[bin] += entry->error;
       }
     }
   }
