@@ -29,8 +29,8 @@ sub OnExit {
 
 package MyFrame;
 use base 'Wx::Frame';
-use Wx::Event qw(EVT_BUTTON EVT_CLOSE EVT_COMMAND EVT_MENU);
-use Wx qw(wxVERTICAL wxHORIZONTAL wxLEFT wxRIGHT wxTOP wxBOTTOM wxEXPAND wxALL wxALIGN_CENTER wxSYS_SYSTEM_FONT wxFONTWEIGHT_BOLD wxGA_SMOOTH wxGA_HORIZONTAL wxID_ABOUT wxID_EXIT wxID_CLOSE wxYES_NO wxICON_QUESTION wxYES wxBITMAP_TYPE_ICO wxDEFAULT_FRAME_STYLE wxRESIZE_BORDER wxMAXIMIZE_BOX);
+use Wx::Event qw(EVT_BUTTON EVT_CLOSE EVT_COMMAND EVT_MENU EVT_TIMER);
+use Wx qw(wxVERTICAL wxHORIZONTAL wxLEFT wxRIGHT wxTOP wxBOTTOM wxEXPAND wxALL wxALIGN_CENTER wxSYS_SYSTEM_FONT wxFONTWEIGHT_BOLD wxGA_SMOOTH wxGA_HORIZONTAL wxID_ABOUT wxID_EXIT wxID_CLOSE wxYES_NO wxICON_QUESTION wxYES wxBITMAP_TYPE_ICO wxDEFAULT_FRAME_STYLE wxRESIZE_BORDER wxMAXIMIZE_BOX wxTIMER_CONTINUOUS);
 
 sub new {
     my ($ref) = @_;
@@ -101,9 +101,15 @@ sub new {
 
     # Tray icon
     my $trayicon = MyTrayIcon->new($self);
+
+    # Messages from worker threads
+    my $timer = Wx::Timer->new($self, -1);
+    $timer->Start(100, wxTIMER_CONTINUOUS);
+    EVT_TIMER($self, $timer->GetId(), sub { $_[0]->OnThreadCallback(undef, \@threads) });
+    #EVT_COMMAND($self, -1, $main::THREAD_EVENT, sub { $_[0]->OnThreadCallback($_[1], \@threads) });
+
     # Events
     EVT_CLOSE($self, sub { my ($self, $event) = @_; $self->OnClose($event, $trayicon) });
-    EVT_COMMAND($self, -1, $main::THREAD_EVENT, sub { $_[0]->OnThreadCallback($_[1], \@threads) });
     EVT_MENU($self, wxID_ABOUT, \&OnAbout);
     EVT_MENU($self, wxID_CLOSE, sub { $self->OnToggleWindow(0) });
     EVT_MENU($self, wxID_EXIT, \&OnExit);
@@ -124,28 +130,35 @@ sub OnButton {
 
 sub OnThreadCallback {
     my ($self, $event, $threads) = @_;
-    @_ = (); # Avoid "Scalars leaked" error, see Wx::Thread.
+    # @_ = (); # Avoid "Scalars leaked" error, see Wx::Thread.
     # my $status = $event->GetData();
-    my $status = {};
-    { lock @main::events; $status = pop @main::events }
-    my $thread = $status->{thread} || 0;
+MESSAGE:
+    while ( 1 ) {
+        my $status = {};
+        {
+            lock @main::events;
+            last MESSAGE unless scalar(@main::events) > 0;
+            $status = pop @main::events;
+        }
+        my $thread = $status->{thread} || 0;
 
-    if ( ($status->{mode}||'') eq 'STOPPING' )
-        { $self->Close(1); return }
-    my $str = main::RenderStatus($status);
+        if ( ($status->{mode}||'') eq 'STOPPING' )
+            { $self->Close(1); return }
+        my $str = main::RenderStatus($status);
 
-    my ($label, $progress) = @{$threads->[$thread]};
-    $label->SetLabel($str);
-    if ( !$progress ) {}
-    elsif ( defined($status->{progress}) ) {
-        $progress->SetRange($status->{range}) if defined($status->{range});
-        $progress->SetValue($status->{progress});
-    } else { $progress->SetValue(0) }
+        my ($label, $progress) = @{$threads->[$thread]};
+        $label->SetLabel($str);
+        if ( !$progress ) {}
+        elsif ( defined($status->{progress}) ) {
+            $progress->SetRange($status->{range}) if defined($status->{range});
+            $progress->SetValue($status->{progress});
+        } else { $progress->SetValue(0) }
 
-    # Debugging
-    $str = "t".($status->{thread}||0)." is $status->{mode}";
-    $str .= sprintf(" (%03d)",$status->{progress}) if exists($status->{progress});
-    print length($str).":'$str'\n";
+        # # Debugging
+        # $str = "t".($status->{thread}||0)." is $status->{mode}";
+        # $str .= sprintf(" (%03d)",$status->{progress}) if exists($status->{progress});
+        # print length($str).":'$str'\n";
+    }
 }
 
 sub OnAbout {
@@ -243,8 +256,9 @@ our @events :shared = ();
 our $statusposter = sub {
     my ($result) = @_;
     { lock(@events); push @events, $result }
-    my $event = new Wx::PlThreadEvent(-1, $THREAD_EVENT, 0); # $result);
-    Wx::PostEvent($FRAME, $event) if $FRAME;
+    # # WxPlThreadEvent sometimes crashes.
+    # my $event = new Wx::PlThreadEvent(-1, $THREAD_EVENT, 0); # $result);
+    # Wx::PostEvent($FRAME, $event) if $FRAME;
 };
 StartClient();
 
