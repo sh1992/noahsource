@@ -15,6 +15,7 @@ Usage: spectrograph.sh [-f <format>|-p|-P] [-t <title>] [-T <title>]
     -t <title>, --title         Title in legend for <file> plot.
     -T <title>, --match-title   Title in legend for <match file> plot.
     --nofitness                 Do not plot fitness (default for non-png)
+    --range <min>:<max>         Frequency range to plot.
     <file>.cat                  SPCAT .CAT file to plot.
     <match file>.cat            SPCAT .CAT file to show underneath main plot.
 
@@ -32,8 +33,9 @@ FORMAT=png
 TITLE=""
 MATCHTITLE=""
 NOFITNESS=""
+XRANGE=""
 
-TEMP=`getopt -o f:pPtT --long format:,png,postscript,title:match-title:,nofitness \
+TEMP=`getopt -o f:pPtT --long format:,png,postscript,title:match-title:,nofitness,range: \
      -n 'spectrograph.sh' -- "$@"`
 if [ $? != 0 ] ; then
     usage
@@ -49,6 +51,7 @@ while true; do
         -t|--title) TITLE="$2"; shift ;;
         -T|--match-title) MATCHTITLE="$2"; shift ;;
         --nofitness) NOFITNESS="1"; shift ;;
+        --range) XRANGE="$2"; shift 2 ;;
         --) shift; break ;;
         *) echo "Internal error"; exit 1 ;;
     esac
@@ -100,6 +103,7 @@ fi
 # Generate output plot file
 [ -z "$TITLE" ] && TITLE=`basename "$FN" .cat`
 [ -z "$MATCHTITLE" -a -n "$MATCH" ] && MATCHTITLE=`basename "$MATCH" .cat`
+[ -z "$XRANGE" ] && XRANGE=8700:18300
 
 OUT="$BASEFN$EXT"
 FILTER="awk '{print substr(\$0,1,13),substr(\$0,14,8),substr(\$0,22,8)}'"
@@ -108,7 +112,7 @@ echo "$FN" '=>' "$OUT"
 cat <<EOF
 set term $FORMAT
 set output "$OUT"
-set xrange [8700:18300]
+set xrange [$XRANGE]
 set lmargin at screen .1
 EOF
 [ -n "$MATCH" ] && cat <<EOF
