@@ -403,7 +403,7 @@ int generate_input_files(specopts_t *opts, unsigned int generation,
               else if ( index == 2 ) /* C */
                 fprintf(fh, "%uE-05", opts->linkbc?((x[1]-x[2])/2):x[2]);
               else if ( index < SEGMENTS ) /* DJ, DJK, DK, delJ, delK */
-                fprintf(fh, "%sE-10", djkstr[index-3]);
+                fprintf(fh, "%sE-12", djkstr[index-3]);
               else {
                 printf("template: Index too large %d\n", index);
                 return i+1;
