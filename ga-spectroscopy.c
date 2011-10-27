@@ -103,6 +103,7 @@ typedef struct {
   char *obsfile;		/* Observation file */
   char *spcatbin;		/* SPCAT program file */
   unsigned int bins;		/* Number of bins */
+  float binscale;               /* Scaling to apply each generation */
   float distanceweight;
   int stdoutfd, devnullfd;	/* File descriptors used to hide SPCAT output */
   datarow *observation;		/* Data storage for observation */
@@ -568,6 +569,9 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 46: /* errordecay */
     ((specopts_t *)settings->ref)->errordecay = atof(optarg);
     break;
+  case 47: /* binscale */
+    ((specopts_t *)settings->ref)->binscale = atof(optarg);
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -747,6 +751,11 @@ int main(int argc, char *argv[]) {
      * Decay the error estimate for SPCAT at rate FLOAT
      */
     {"errordecay", required_argument, 0, 46},
+    /** --binscale NUMBER
+     *
+     * Add this number (float) of bins each generation
+     */
+    {"binscale", required_argument, 0, 47},
     {0, 0, 0, 0}
   };
 #ifdef CLIENT_ONLY
@@ -781,6 +790,7 @@ int main(int argc, char *argv[]) {
     specopts.userange[i] = specopts.rangetemp[i] = specopts.rangemin[i] =
       specopts.rangemax[i] = specopts.initialerror[i] = 0;
   specopts.errordecay = 0;
+  specopts.binscale = 0;
   specopts.popfile = NULL;
   specopts.drfile = NULL;
   specopts.doubleres = NULL;
@@ -869,7 +879,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  if ( specopts.errordecay != 0 ) {
+  if ( ( specopts.errordecay != 0 ) || ( specopts.binscale != 0 ) ) {
     /* Do not enable caching if error decays */
     settings.usecaching = 0;
   }
@@ -1376,6 +1386,12 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
 
   if ( terminating )
     qprintf(ga->settings, "Best result saved in %s\n", opts->basename_out);
+
+  /* Update bin size */
+  if ( opts->binscale != 0 ) {
+    int scaledbins = opts->bins + ga->generation * opts->binscale;
+    qprintf(ga->settings, "Now using %d bins\n", scaledbins);
+  }
   return 0;
 }
 
@@ -1445,11 +1461,12 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   int rc = 0;
   /* int xi, yi; */
   double fitness;
-  const double binsize = ((double)(opts->obsrangemax-opts->obsrangemin))/opts->bins;
-  double obsbin[opts->bins], compbin[opts->bins];
-  int obsbincount[opts->bins], compbincount[opts->bins];
-  double binweights[opts->bins]; /* 20110215, J-weighting */
-  double binerror[opts->bins]; /* 20110804, Error propagation */
+  int scaledbins = opts->bins + ga->generation * opts->binscale;
+  const double binsize = ((double)(opts->obsrangemax-opts->obsrangemin))/scaledbins;
+  double obsbin[scaledbins], compbin[scaledbins];
+  int obsbincount[scaledbins], compbincount[scaledbins];
+  double binweights[scaledbins]; /* 20110215, J-weighting */
+  double binerror[scaledbins]; /* 20110804, Error propagation */
 #ifdef USE_SPCAT_OBJ
   spcs_t spcs;
   char *buffers[NFILE];
@@ -1637,7 +1654,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   }
 
   /* Initialize bins */
-  for ( i = 0; i < opts->bins; i++ ) {
+  for ( i = 0; i < scaledbins; i++ ) {
     obsbin[i] = 0; compbin[i] = 0;
     obsbincount[i] = 0; compbincount[i] = 0;
     binweights[i] = 0; binerror[i] = 0;
@@ -1673,7 +1690,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
         continue;
       /* We're within the valid range */
       int bin = floor((entry->frequency-opts->obsrangemin)/binsize);
-      if ( bin >= opts->bins ) bin = opts->bins-1;
+      if ( bin >= scaledbins ) bin = scaledbins-1;
       if ( j == 0 ) {
         obsbin[bin] += entry->intensity;
         obsbincount[bin]++;
@@ -1695,20 +1712,20 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     }
   }
 #if 0 /* EXPERIMENTAL BEHAVIOR 2010-09-26 */
-  double binweights[opts->bins];
-  sortable_bin binorder[opts->bins];
-  for ( i = 0; i < opts->bins; i++ ) {
+  double binweights[scaledbins];
+  sortable_bin binorder[scaledbins];
+  for ( i = 0; i < scaledbins; i++ ) {
     binorder[i].index = i; binorder[i].total = compbin[i];
   }
-  qsort(binorder, opts->bins, sizeof(sortable_bin), bin_comparator);
-  double binmin = binorder[opts->bins-1].total;
+  qsort(binorder, scaledbins, sizeof(sortable_bin), bin_comparator);
+  double binmin = binorder[scaledbins-1].total;
   double bindiff = binorder[0].total-binmin;
-  for ( i = 0; i < opts->bins; i++ ) {
+  for ( i = 0; i < scaledbins; i++ ) {
     binweights[i] = (obsbin[i]-binmin)/bindiff;
   }
 #endif
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
-  for ( i=0; i<opts->bins; i++ ) {
+  for ( i=0; i<scaledbins; i++ ) {
     float comp = opts->distanceweight *
       powf(fabs(obsbin[i]-compbin[i]),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
