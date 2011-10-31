@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# distclient.pl - ga-spectroscopy distributor client.
+# distclient.pl - Distributed Computing Client
 #
 use threads;
 use threads::shared;
@@ -17,15 +17,14 @@ use File::Temp;
 use File::Copy;
 use File::Spec;
 use URI;
+use Archive::Tar;
 use warnings;
 use strict;
 
-my $HAVE_Win32_Process = 0;
 my $HAVE_Win32_API = 0;
-eval 'use Win32::Process; $HAVE_Win32_Process = 1';
 eval 'use Win32::API; $HAVE_Win32_API = 1';
 
-our $VERSION = 20110428;
+our $VERSION = 20111031;
 my $USERAGENT = "distclient.pl/$VERSION";
 
 # Load server configuration
@@ -45,6 +44,7 @@ if ( !$HOST || !$PORT ) {
 
 # Detect system information (number of processors)
 my $processorcount = 1;
+my $platform = '';
 if ( $^O eq 'MSWin32' ) {
     die "Need Win32::API to collect system statistics on MSWin32"
         unless $HAVE_Win32_API;
@@ -56,12 +56,18 @@ if ( $^O eq 'MSWin32' ) {
     #   DWORD  dwProcessorType; DWORD  dwAllocationGranularity;
     #   WORD  wProcessorLevel; WORD  wProcessorRevision; } SYSTEM_INFO;
     # void GetSystemInfo(LPSYSTEM_INFO lpSystemInfo);
-    my $function = Win32::API->new('kernel32','GetSystemInfo','P','V')
+    my $function = ( Win32::API->new('kernel32','GetNativeSystemInfo','P','V')
+                     || Win32::API->new('kernel32','GetSystemInfo','P','V') )
         or die "Can't access GetSystemInfo";
+    # Will this even work on 64-bit Perl?
     my $systemInfo = pack('L9',0,0,0,0,0,0,0,0,0);
     $function->Call($systemInfo);
     my $dwNumberOfProcessors = (unpack('L9', $systemInfo))[5];
     $processorcount = $dwNumberOfProcessors if ($dwNumberOfProcessors||0) > 0;
+    # Determine processor architecture
+    my $wProcessorArchitecture = (unpack('L9', $systemInfo))[0]>>16;
+    if ( $wProcessorArchitecture == 9 ) { $platform = 'win64' } # 9 = AMD64
+    else { $platform = 'win32' } # 0 = X86, 6=Itanium
 }
 elsif ( -r '/proc/cpuinfo' ) {
     # On Linux, use procfs to find out how many CPUs we have
@@ -71,6 +77,15 @@ elsif ( -r '/proc/cpuinfo' ) {
     }
     close F;
 }
+if ( $^O eq 'linux' ) {
+    my $uname = `uname -m`;
+    $uname =~ s/\s//g;
+    $uname = 'x86' if $uname =~ m/^i[0-9]86$/;
+    $uname = 'x86_64' if $uname =~ m/amd64|86[_-]64/;
+    $platform = "linux-$uname" if $uname;
+}
+$platform ||= 'all';
+
 # Use defaults on other systems. Consider using Sys::Info instead.
 my $hostname = hostname;
 
@@ -105,13 +120,17 @@ sub DoInhibit {
 my $tempdir = File::Temp::tempdir('distclient-temp-XXXXX',
                                   TMPDIR => 1, CLEANUP => 1);
 print "Using temporary directory $tempdir\n";
-GASpecInit($tempdir);
 chdir $tempdir;
 
 my %work :shared = ();          # Workunit information
 my @finishedwork :shared = ();  # Work units to be reported as completed
 my @pendingwork :shared = ();   # Work units yet to be started on
 my %status :shared = ();
+
+my $downloading :shared = 0;    # Mutex for download phase
+my $appfiles :shared = 0;       # Mutex for application files
+my $appfn :shared = '';         # Current application filename
+my $appversion :shared = 0;     # App "version" (threads reload on change)
 
 our $clientthread = undef;      # Socket communication thread
 our @workthreads;               # Worker threads
@@ -289,6 +308,9 @@ sub SocketThread {
                         my $json = to_json(\@k);
                         print $sock "WORKING $json\n";
                     }
+                    elsif ( $l =~ m/^PING/ ) {
+                        print $sock "PONG\n";
+                    }
                     #print "$l\n"; # FIXME
                 }
             }
@@ -319,6 +341,7 @@ sub WorkThread {
         threads->exit();
     };
     local $SIG{PIPE} = 'IGNORE';
+    my %app = ();
     while ( 1 ) {
         { # Wait for work
             lock(@pendingwork);
@@ -334,7 +357,24 @@ sub WorkThread {
             PostStatus($id, mode => 'STARTING', thread => $thread);
             # Check files
             DownloadFiles($id);
-            my @outfiles = GASpecWork($id);
+            # Get read-lock on application files
+            {
+                lock($appfiles);
+                cond_wait($appfiles) until $appfiles >= 0;
+                $appfiles++
+            }
+            my @outfiles;
+            my $rc =eval {
+                LocalLoadApplication($id, \%app);
+                my $workfunc = \&{$app{work}};
+                @outfiles = $workfunc->($id, $work{$id});
+                1;
+            };
+            { lock($appfiles); $appfiles--; cond_broadcast($appfiles) }
+            unless ( $rc ) {
+                die if $@ =~ m/WORKFAIL/;   # We've already reported failure
+                WorkFail($id, "Starting work: $@");
+            }
             # Upload results
             PostStatus($id, mode => 'UPLOADING', progress => 0,
                        range => scalar(@outfiles));
@@ -355,31 +395,39 @@ sub WorkFail {
     print "$message\n";
     lock(@finishedwork);
     push @finishedwork, shared_clone({ id => $id, error => $message });
-    die;
+    die "WORKFAIL";
 }
 
 sub md5 {
     my ($fn) = @_;
     open F, '<', $fn or return undef;
+    binmode F;
     my $md5 = Digest::MD5->new->addfile(*F)->hexdigest;
     close F;
     return $md5;
 }
 
-sub DownloadFiles { # FIXME: Race condition (multiple threads fetching same file)
+sub DownloadFiles {
     my ($id) = @_;
     my $obj = $work{$id};
     my $async = HTTP::Async->new();
     my %fetch = (); my $nfiles = 0;
     my $got = 0;
+    my $appfn = '';
+    my $appchanged = 0;
+    lock($downloading); # Prevent races
     foreach my $f ( @{$obj->{files}} ) {
         my ($valid, $url, $fn) = @$f;
-        if ( $fn !~ m/^(([a-z]+)\/([-_.a-zA-Z0-9]+))$/ or $1 eq 'lib' or
-             ( -e $2 and !-d $2 ) ) {
-            return WorkFail($id, "Invalid filename $fn");
+        if ( IsApplication($fn) ) {
+            WorkFail($id,"Workunit provided multiple applications") if $appfn;
+            $appfn = $fn;
         }
-        my ($dir,$basename) = ($2,$3);
-        mkdir $dir unless -d $dir;
+        elsif ( $fn =~ m/^(([a-z]+)\/([-_.a-zA-Z0-9]+))$/ and
+                ( !-e $2 or -d $2 ) ) {
+            my ($dir,$basename) = ($2,$3);
+            mkdir $dir unless -d $dir;
+        }
+        else { return WorkFail($id, "Invalid filename $fn") }
         my $checksum = md5($fn);
         next if defined($checksum) and $checksum eq $valid;
         # Checksum did not match, so download the file
@@ -388,6 +436,7 @@ sub DownloadFiles { # FIXME: Race condition (multiple threads fetching same file
             my $u = URI->new($url);
             # FIXME: Integrate to avoid code duplication
             open F, '>', $fn or return WorkFail($id, "Cannot save $fn");
+            binmode F;
             print F $u->data;
             close F or return WorkFail($id, "Cannot close saved $fn");
             # Verify checksum
@@ -403,7 +452,12 @@ sub DownloadFiles { # FIXME: Race condition (multiple threads fetching same file
             $fetch{$reqid} = [$valid, $fn];
         }
     }
-    return unless $nfiles;
+    # Check application
+    WorkFail($id, "Workunit provided no application") unless $appfn;
+    unless ( $nfiles ) {
+        CheckApplication($id, $appfn);
+        return;
+    }
     PostStatus($id, mode => 'DOWNLOADING', progress => 0, range => $nfiles);
     while ( my ($response,$respid) = $async->wait_for_next_response ) {
         # Update progress bar
@@ -419,13 +473,98 @@ sub DownloadFiles { # FIXME: Race condition (multiple threads fetching same file
         }
         # Save response
         open F, '>', $fn or return WorkFail($id, "Cannot save $fn");
+        binmode F;
         print F $response->decoded_content;
         close F or return WorkFail($id, "Cannot close saved $fn");
         # Verify checksum
         my $checksum = md5($fn);
-        if ( $checksum ne $valid ) {
+        if ( !defined($checksum) or ($checksum ne $valid) ) {
             return WorkFail($id, "Cannot verify checksum for $fn");
         }
+        $appchanged = 1 if $fn eq $appfn;
+    }
+    CheckApplication($id, $appfn, $appchanged);
+}
+
+sub CheckApplication {
+    my ($id, $myappfn, $appchanged) = @_;
+    # Check if we need to change apps
+    if ( !$appfn || $appchanged || $appfn ne $myappfn ) {
+        # Get write lock on application
+        {
+            lock($appfiles);
+            cond_wait($appfiles) until $appfiles == 0;
+            $appfiles--
+        }
+        my $rc = eval {
+            ## The old app shouldn't be able to prevent a switch, so ignore
+            ## any errors it may produce.
+            #eval { my $func = \&{$app{stop}}; $func->() } if $app{stop};
+            # Unpack the new app
+            UnpackApplication($myappfn);
+            $appfn = $myappfn;
+            ## Start the new app
+            #if ( $app{start} ) {
+            #    my $func = \&{$app{start}};
+            #    $func->();
+            #}
+            1;
+        };
+        $appversion++;
+        $appversion = -1 unless $rc;
+        # Release lock on application
+        { lock($appfiles); $appfiles++; cond_broadcast($appfiles) }
+        WorkFail($id, "Application change failed: $@") unless $rc;
+    }
+}
+
+sub LocalLoadApplication {
+    my ($id, $app) = @_;
+    WorkFail($id, "No app loaded") if $appversion == -1;
+    return if defined($app->{appversion}) and $appversion == $app->{appversion};
+    print "Loading app version $appversion\n";
+    my $appobj = do 'app.pl'
+        or WorkFail($id, "Application code could not be loaded: $@ $!");
+    # Remove old items from app hash
+    UnsetApplication();
+    # Insert new items into app hash
+    foreach ( keys %$appobj ) { $app->{$_} = $appobj->{$_} }
+    $app->{appversion} = $appversion;
+    # Sanity check
+    die "Application code provides no work function" unless $app->{work}
+}
+
+sub IsApplication { return $_[0] =~ m/^([-_a-zA-Z0-9.]+)\.app$/ }
+
+sub UnsetApplication {
+    my ($x) = @_;
+    my @x = keys %$x;
+    for ( @x ) { delete $x->{$_} }
+}
+
+sub UnpackApplication {
+    my ($fn) = @_;
+    # Unpack the archive
+    my $tar = Archive::Tar->new();
+    $tar->read($fn) or die "Can't open $fn: $!";
+    foreach my $f ( $tar->list_files() ) {
+        my @components = split /[\\\/]+/, $f;
+        shift @components while @components and ($components[0] eq '.' or $components[0] eq '');
+        next unless @components;
+        my $filearch = $components[0];
+        $components[0] = '.';
+        # Check if file is in correct directory
+        next unless $filearch eq 'all' or $filearch eq 'any' or
+                    $filearch eq $platform;
+        # Verify directory components to ensure there are no forbidden
+        # characters or words
+        foreach ( @components ) {
+            if ( $_ =~ m/[\/\\?%*:|"<>\$\000-\037]|^(CON|PRN|AUX|NUL|COM\d+|LPT\d+)($|\.)|^\.\.|^\s*$/i ) {
+                die "Application archive contains invalid filename: $f";
+            }
+        }
+        # Extract the file
+        $tar->extract_file($f, join('/', @components)) or die "Could not extract $f from app: $!";
     }
 }
 
@@ -439,7 +578,7 @@ sub UploadFiles {
     foreach my $f ( @$outfiles ) {
         my $buf = '';
         open F, '<', $f or WorkFail($id, "Failed to read output file $f");
-        # FIXME should use binmode, buffered IO
+        binmode F; # FIXME should use binmode, buffered IO
         1 while sysread(F, $buf, 512, length($buf));
         close F;
         my $checksum = Digest::MD5::md5_hex($buf);
@@ -490,109 +629,6 @@ sub CleanupFiles {
         # FIXME: The following is too much of a hack, need better scheme.
         #unlink $fn if $fn =~ m/^temp/;
     }
-}
-
-sub GASpecInit {
-    my ($dir) = @_;
-    # Initialize the temporary directory to contain the gaspec software
-    my $suffix = ($^O eq 'MSWin32') ? '.exe' : '';
-    my @executables = ("spcat$suffix", "ga-spectroscopy-client$suffix");
-    foreach ( @executables ) {
-        my $inf = File::Spec->catfile($FindBin::Bin, $_);
-        my $outf = File::Spec->catfile($dir, $_);
-        copy($inf, $outf) or die "Cannot copy $_: $!";
-        my $mode = (stat $outf)[2];
-        if ( defined($mode) ) {
-            $mode |= ($mode&0444)>>2; # Set "execute" bit for each "read" bit
-            # This chmod is required on Linux, but might not work on Win32
-            eval { chmod $mode, $outf }
-        }
-    }
-}
-
-sub GASpecWork {
-    my ($id) = @_;
-    my $obj = $work{$id};
-    my $TEMPDIR = File::Spec->catdir(File::Spec->curdir, 'temp');
-
-    # Create input file from conf file and popfile
-    my $conffile = $work{$id}{files}[-2][2];
-    my $popfile = $work{$id}{files}[-1][2];
-    my $nitems = 0;
-    (my $fh, my $infn) =
-        File::Temp::tempfile("temp-input-XXXXX", DIR => $TEMPDIR,
-                             OPEN => 1, EXLOCK => 0, UNLINK => 0);
-    foreach my $srcfn ( $conffile, $popfile ) {
-        open IN, '<', $srcfn or return WorkFail($id, "Failed to read $srcfn");
-        while ( <IN> ) {
-            $nitems++ if m/^I /;
-            print $fh $_;
-        }
-    }
-    close IN;
-    close $fh;
-
-    # Create output file (FIXME: This should all happen in a real tempdir)
-    (undef, my $outfn) =
-        File::Temp::tempfile("temp-output-XXXXX", DIR => $TEMPDIR,
-                             OPEN => 0, EXLOCK => 0, UNLINK => 0);
-
-    # Start gaspec process
-    my $i = 0;
-    PostStatus($id, mode => 'WORKING', progress => 0, range => $nitems);
-    my $logbuf = "ERROR LOG FOLLOWS (Something went wrong)\n";
-    my $rc;
-    {
-        #my $quit = 0;
-        my $pid = 0;
-        local $SIG{TERM} = sub {
-            # If we don't shut down the subprocess before stopping the thread,
-            # Win32 Perl crashes.
-            if ( $pid > 0 ) { print "Killing $pid\n"; kill 'TERM', $pid }
-            close SPEC;
-            print "Worker exiting (3)\n";
-            threads->exit;
-            #$quit = 1;
-        };
-        #print "$id Starting ./ga-spectroscopy-client \"$infn\" \"$outfn\"\n";
-        my $program = File::Spec->catfile(File::Spec->curdir,
-                                          'ga-spectroscopy-client');
-        my $cmd = "$program \"$infn\" \"$outfn\"";
-        $cmd = "nice -n19 $cmd" if $^O ne 'MSWin32';
-        $pid = open SPEC, '-|', $cmd or WorkFail($id, 'Cannot start gaspec client');
-        # Nice the process on MSWin32. Note that it would be better to do this
-        # in CreateProcess...
-        if ( $HAVE_Win32_Process ) {
-            my $process;
-            if ( Win32::Process::Open($process, $pid, 0) ) {
-                $process->SetPriorityClass(&IDLE_PRIORITY_CLASS);
-            }
-        }
-        { my $oldfh = select SPEC; $| = 1; select $oldfh }
-        #print "$id Reading\n";
-        while ( <SPEC> ) {
-            #print "$id $_"; # FIXME: Do something with these messages
-            if ( m/^F / ) {
-                $i++;
-                PostStatus($id, progress => $i);
-            }
-            $logbuf .= $_;
-        }
-        #print "$id gaspec done\n";
-        $rc = close SPEC;
-        unlink $infn; # Remove our temporary input file
-        #if ( $quit ) { close SPEC; print "Worker exiting (2)\n"; threads->exit }
-    }
-
-    # Process finished
-    if ( $rc ) { return $outfn }
-    else { # Something went wrong, save the error log
-        open F, '>', $outfn;
-        print F $logbuf;
-        close F;
-        print $logbuf;
-    }
-    return $outfn;
 }
 
 1;

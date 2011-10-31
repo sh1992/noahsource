@@ -168,7 +168,7 @@ sub OnAbout {
     $adi->SetVersion($main::VERSION);
     # Show author name instead of copyright statement
     $adi->SetCopyright('Noah Anderson <noah.anderson@ncf.edu>');
-    #$adi->SetIcon($self->GetIcon());
+    $adi->SetIcon($self->GetIcon());
     Wx::AboutBox($adi);
 }
 

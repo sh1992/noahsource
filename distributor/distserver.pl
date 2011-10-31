@@ -11,9 +11,8 @@ use warnings;
 use strict;
 
 # Configuration
-my $VERSION = 20110428;
+my $VERSION = 20111031;
 my $PORT = 9933;
-my $deadline = 35;
 
 # Create listener socket
 my $listener = IO::Socket::INET->new
@@ -32,6 +31,7 @@ my %workers = ();
 my %clients = ();
 my %filenos = ();           # Convert fileno to socket ID
 my $nextid = 1;
+my $lastworkerdump = 0;     # Last time we saved the list of workers
 
 print "distserver ready\n";
 while ( 1 ) {
@@ -58,6 +58,11 @@ while ( 1 ) {
             else {
                 $select->remove($sock);
                 delete $clients{$id};
+                # Because the distributor may have disconnected while we were
+                # reporting completed work, let other distributors check if
+                # we have any free capacity. It might be spurious, but that's
+                # better than having unused workers.
+                NewWorker();
             }
             # Cancel jobs attached to worker
             next;
@@ -74,7 +79,7 @@ while ( 1 ) {
                     for ( my $c = 0; $c < @k; $i = ($i+1)%@k ) {
                         $c++;
                         my $w = $workers{$k[$i]};
-                        if ( $w->{assigned} < $w->{threads} ) {
+                        if ( ($w->{assigned}||0) < ($w->{threads}||0) ) {
                             $worker = $w;
                             last;
                         }
@@ -90,7 +95,8 @@ while ( 1 ) {
                     my $obj = eval { from_json($json) } || undef;
                     $obj = {} if ref($obj) ne 'HASH';
                     my $workerid = $obj->{worker};
-                    my $workersock = $clients{$workers{$workerid}{sock}}{sock};
+                    my $workersock = $workers{$workerid}{sock} ?
+                        $clients{$workers{$workerid}{sock}}{sock} : 0;
                     my $err = '';
                     # Workunit sanity checks
                     if ( !$obj->{id} ) { $err .= ' No workunit ID.' }
@@ -98,8 +104,8 @@ while ( 1 ) {
                     elsif ( !$workerid ) { $err .= ' No worker.' }
                     elsif ( !exists($workers{$workerid}) )
                         { $err .= ' Invalid worker.' }
-                    elsif ( $workers{$workerid}{assigned} >=
-                            $workers{$workerid}{threads} )
+                    elsif ( ($workers{$workerid}{assigned}||0) >=
+                            ($workers{$workerid}{threads}||0) )
                         { $err .= ' Worker is busy.' }
                     elsif ( !$workersock ) {
                         DeleteWorker($workerid);
@@ -121,6 +127,9 @@ while ( 1 ) {
                 else { print $sock "ERR Invalid command\n" }
             }
             elsif ( $clients{$id}{kind} == 1 ) {    # Worker
+                my $w = $workers{$clients{$id}{worker}};
+                # Track our last-seen-time for the worker
+                $w->{seen} = time;
                 if ( $l =~ m/^WORKACCEPTED/ ) {}
                 elsif ( $l =~ m/^WORK(FINISHED|FAILED) (.+)$/ ) {
                     my ($state,$json) = ($1, $2);
@@ -133,7 +142,6 @@ while ( 1 ) {
                         { $error = 'Workunit not assigned to you' }
                     if ( $error ) {
                         print $sock "ERR $error\n";
-                        my $w = $workers{$clients{$id}{worker}};
                         $w->{assigned}--
                             unless $w->{assigned} <= 0;
                     }
@@ -152,7 +160,6 @@ while ( 1 ) {
                         $workunits{$_}{heartbeat} = $now;
                         $workunits{$_}{queried} = 0;
                     }
-                    my $w = $workers{$clients{$id}{worker}};
                     my $n = scalar(@$obj);
                     if ( $w->{assigned} != $n ) {
                         print "Worker taskcount update $w->{assigned}->$n\n";
@@ -170,10 +177,10 @@ while ( 1 ) {
                 }
                 elsif ( $l =~ m/^THREADS (\d+)$/ ) {
                     my $t = $1;
-                    my $w = $workers{$clients{$id}{worker}};
                     NewWorker() if $t > $w->{threads};
                     $w->{threads} = $t;
                 }
+                elsif ( $l =~ m/^PONG/ ) { }
                 else { print $sock "ERR Invalid command\n" }
             }
             else {
@@ -198,7 +205,7 @@ while ( 1 ) {
                         $clients{$id}{worker} = $ident;
                         $workers{$ident} =
                             { sock => $id, id => $ident, name => $name,
-                              threads => 0, assigned => 0 };
+                              threads => 0, assigned => 0, seen => time };
                         # FIXME: Client should detect number of threads.
                         # FIXME: Check already-assigned jobs.
                         print $sock "OK I will now send you work\n";
@@ -216,6 +223,7 @@ while ( 1 ) {
     my $now = time;
     my @k = keys %workunits;
     foreach my $k ( @k ) {
+        my $deadline = ($workunits{$k}{obj}{duration}||15)*2;
         next unless $workunits{$k}{heartbeat}+$deadline < $now;
         if ( ( $workunits{$k}{queried} >= $workunits{$k}{heartbeat} and
                $workunits{$k}{queried}+$deadline < $now ) or
@@ -243,6 +251,8 @@ while ( 1 ) {
             # Do query
         }
     }
+    # Dump worker list
+    DumpWorkers() if time >= $lastworkerdump+60;
 }
 
 sub DeleteWorkunit {
@@ -277,4 +287,22 @@ sub NewWorker {
         my $c = $_->{sock};
         print $c "NEWWORKER\n" if $_->{kind} == 2;
     }
+}
+
+# Save a dump of all connected workers (for monitoring)
+sub DumpWorkers {
+    unless ( open WF, '>', 'workers.dat' ) {
+        warn "Can't write worker dump: $!";
+        return;
+    }
+    my $now = time;
+    foreach my $id ( keys %workers ) {
+        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{threads}\n";
+        if ( $workers{$id}{seen}+300 < $now ) {
+            my $sock = $clients{$workers{$id}{sock}}{sock};
+            print $sock "PING\n";
+        }
+    }
+    close WF;
+    $lastworkerdump = $now;
 }

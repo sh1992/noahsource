@@ -50,7 +50,7 @@ Section "" ;No components page, name is not important
     SetOutPath $INSTDIR
 
     File LEGAL.txt
-    File /r out/*
+    File /r out-MSWin32/*
 
     CreateShortCut "$DESKTOP\${LONGNAME}.lnk" "$INSTDIR\${SHORTNAME}.exe"
 

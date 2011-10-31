@@ -2,39 +2,35 @@
 #
 # buildwin32-from-template.sh - Build distclient for Win32
 #
-# It's like buildwin32.pl, but doesn't recompute the Perl dependencies
+# It's like build-dist.pl, but uses precomputed Perl dependencies
 
-BIN=distclient-template-win32-20110918.tar.xz
+BIN=distclient-template-win32-20111031.tar.xz
 URL=http://students.ncf.edu/noah.anderson/spec/$BIN
+DISTDIR=out-MSWin32
 
 set -e
 
-# Build ga-spectroscopy-client and perl-wrapper for Windows
-# (using MinGW in Wine)
-(cd ..; rm -f ga-spectroscopy-client.exe; sh make-wine.sh || true; [ -f ga-spectroscopy-client.exe ])
-# Build wrapper program
+# Build wrapper program (using MinGW in Wine)
 (cd wrapper; sh make-wine.sh || true; [ -f distclient.exe ])
 # Download template (contains distclient binaries, particularly Perl)
 [ -f $BIN ] || wget $URL
 
 # Extract template
-mkdir -p out
-cd out
+mkdir -p $DISTDIR
+cd $DISTDIR
 tar xf ../$BIN
-# Update template with just-build binaries from the source tree
+# Update template with just-built binaries from the source tree
 for x in *; do
-  [ -d $x ] && continue
-  for y in ../wrapper ../.. ..; do
-    if [ -f $y/$x ]; then
-      echo Updating $x with $y/$x...
-      cp -p $y/$x $x
-      break
-    fi
-  done
+    [ -d $x ] && continue
+    for y in ../wrapper ..; do # ../..
+        if [ -f $y/$x ]; then
+            echo Updating $x with $y/$x...
+            cp -p $y/$x $x
+            break
+        fi
+    done
 done
 cd ..
 
 # Build installer
 makensis distclient.nsi
-
-

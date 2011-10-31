@@ -12,6 +12,7 @@ use File::Spec;
 use File::Temp;
 use JSON;
 use Time::HiRes;
+use File::Copy;
 use URI;
 use warnings;
 use strict;
@@ -31,6 +32,9 @@ my $DATADIR = '../data';                    # Location of data directory
 my $DATAURL = "http://$WHOST:$WPORT/spec/data"; # URL of the same
 my $TEMPDIR = '../temp';                    # Location of a temporary location
 my $TEMPURL = "http://$WHOST:$WPORT/spec/temp"; # URL of the same
+my $APPDIR = '.';
+my $APPNAME = 'ga-spectroscopy.app';
+my $APPURL = "$TEMPURL/$APPNAME";
 my $INBOXDIR = '../inbox';
 #my $UPLOADURL = "http://$WHOST:$WPORT/spec/upload"; # URL of uploader
 my $UPLOADURL = 'data:';
@@ -110,6 +114,7 @@ sub mythread {
                                 $fn = "$INBOXDIR/$fn";
                                 $buf = '';
                                 if ( open F, '<', $fn ) {
+                                    binmode F;
                                     $buf .= $_ while <F>;
                                     close F;
                                     unlink $fn;# unless $fatal;
@@ -194,7 +199,7 @@ sub mythread {
                 $socks{$id} = { id => $id, sock => $client, buf => '',
                                 uniqid => $uniqclientid,
                                 config => undef, configfile => undef,
-                                files => [], workerspeed => {} };
+                                files => [[get_app()]], workerspeed => {} };
                 $select->add($client);
             }
             else {
@@ -219,6 +224,13 @@ sub mythread {
             }
         }
     }
+}
+
+sub get_app {
+    my $appfile = "$APPDIR/$APPNAME";
+    copy($appfile, "$TEMPDIR/$APPNAME")
+        or warn "Can't copy $appfile to temp: $!";
+    return (md5($appfile)||'', $APPURL, $APPNAME);
 }
 
 sub HandleSocket {
@@ -384,7 +396,7 @@ sub SendWork {
         upload => $UPLOADURL,
         files => [ @{$socks{$client}{files}},
                    [ $checksum, $popurl, "$REMOTETEMPDIR/$popfn"] ],
-        sent => Time::HiRes::time,
+        sent => Time::HiRes::time, duration => $WUDURATION,
     };
     print $distsock 'DISPATCH ',to_json($workunits{$wuid}),"\n";
 }
@@ -406,6 +418,7 @@ sub TrySending {
 sub md5 {
     my ($fn) = @_;
     open F, '<', $fn or return undef;
+    binmode F;
     my $md5 = Digest::MD5->new->addfile(*F)->hexdigest;
     close F;
     return $md5;
@@ -415,6 +428,7 @@ sub cat {
     my ($fn) = @_;
     my $buf = '';
     open F, '<', $fn or return undef;
+    binmode F;
     1 while sysread(F, $buf, 512, length($buf));
     close F;
     return $buf;
