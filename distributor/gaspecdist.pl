@@ -350,9 +350,10 @@ sub SendWork {
     my $client = $items[$i]->{source};
     # Workerspeed varies based on GA run settings
     my $ws = $socks{$client}{workerspeed};
+    my $duration = $WUDURATION+int(5*rand());
     my $n = ( exists($ws->{$worker->{id}}) && $ws->{$worker->{id}} ) ?
-            $ws->{$worker->{id}} : 10/$WUDURATION;
-    $n *= $WUDURATION;
+            $ws->{$worker->{id}} : 10/$duration;
+    $n *= $duration;
 
     # Generate workunit ID
     my $wuid = sprintf("%s-%04d-%04d%s", $DISPATCHID, $socks{$client}{uniqid},
@@ -396,7 +397,7 @@ sub SendWork {
         upload => $UPLOADURL,
         files => [ @{$socks{$client}{files}},
                    [ $checksum, $popurl, "$REMOTETEMPDIR/$popfn"] ],
-        sent => Time::HiRes::time, duration => $WUDURATION,
+        sent => Time::HiRes::time, duration => $duration,
     };
     print $distsock 'DISPATCH ',to_json($workunits{$wuid}),"\n";
 }
