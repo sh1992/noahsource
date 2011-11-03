@@ -272,6 +272,7 @@ sub SocketThread {
         my $select = IO::Select->new($sock);
         PostStatus(undef, mode => 'WAITING');
         my $sockbuf = '';
+        my $lastseen = 0;
     SOCKLOOP:
         while ( 1 ) {
             while ( $select->can_read(.25) ) {
@@ -283,6 +284,7 @@ sub SocketThread {
                                error => defined($bytes) ? undef : $!);
                     last SOCKLOOP;
                 }
+                $lastseen = 0;
                 while ( $sockbuf =~ s/^(.*?)\r*\n// ) {
                     my $l = $1;
                     if ( $l =~ m/^HELLO/ ) {
@@ -311,6 +313,7 @@ sub SocketThread {
                     elsif ( $l =~ m/^PING/ ) {
                         print $sock "PONG\n";
                     }
+                    elsif ( $l =~ m/^PONG/ ) { }
                     #print "$l\n"; # FIXME
                 }
             }
@@ -324,6 +327,16 @@ sub SocketThread {
                 delete $work{$w->{id}};
                 print $sock "$cmd ", to_json($w), "\n";
                 #PostStatus(undef);
+            }
+            # Check ping time
+            $lastseen++;
+            if ( $lastseen == 2400 ) { print $sock "PING\n" }
+            elsif ( $lastseen >= 2500 ) {
+                close($sock);
+                $sock = undef;
+                PostStatus(undef, mode => 'DISCONNECTED',
+                           error => 'Timed out waiting for a ping reply.');
+                last SOCKLOOP;
             }
             # FIXME: Trap unexpected errors from threads
         }

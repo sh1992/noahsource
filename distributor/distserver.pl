@@ -180,6 +180,7 @@ while ( 1 ) {
                     NewWorker() if $t > $w->{threads};
                     $w->{threads} = $t;
                 }
+                elsif ( $l =~ m/^PING/ ) { print $sock "PONG\n" }
                 elsif ( $l =~ m/^PONG/ ) { }
                 else { print $sock "ERR Invalid command\n" }
             }
