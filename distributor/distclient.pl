@@ -24,7 +24,7 @@ use strict;
 my $HAVE_Win32_API = 0;
 eval 'use Win32::API; $HAVE_Win32_API = 1';
 
-our $VERSION = 20111031;
+our $VERSION = 20111103;
 my $USERAGENT = "distclient.pl/$VERSION";
 
 # Load server configuration

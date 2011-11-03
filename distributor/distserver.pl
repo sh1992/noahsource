@@ -11,7 +11,7 @@ use warnings;
 use strict;
 
 # Configuration
-my $VERSION = 20111031;
+my $VERSION = 20111103;
 my $PORT = 9933;
 
 # Create listener socket
