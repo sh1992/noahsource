@@ -297,6 +297,8 @@ sub DumpWorkers {
     }
     my $now = time;
     foreach my $id ( keys %workers ) {
+        next unless exists($workers{$id}{name}) and defined($workers{$id}{name});
+        next unless exists($workers{$id}{sock}) and defined($workers{$id}{sock});
         print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{threads}\n";
         if ( $workers{$id}{seen}+300 < $now ) {
             my $sock = $clients{$workers{$id}{sock}}{sock};
