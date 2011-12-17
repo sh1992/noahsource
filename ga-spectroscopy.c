@@ -346,7 +346,7 @@ int generate_input_files(specopts_t *opts, unsigned int generation,
   for ( i = 0; i < 5; i++ ) {
     GA_segment v = x[3+i];
     const int zero = ~(1<<(GA_segment_size-1)); // (0xfff...fff)/2
-    sprintf(djkstr[i], "%s%u", (v>0)?"-":"",
+    sprintf(djkstr[i], "%s%u", (v > zero) ? "-" : "",
             (v > zero) ? (v-zero) : (zero-v));
   }
   /* Output data files */
@@ -800,6 +800,7 @@ int main(int argc, char *argv[]) {
   specopts.obsrangemin = RANGEMIN;
   specopts.obsrangemax = RANGEMAX;
   specopts.distributor = NULL;
+  specopts.compress = 0;
 
 #ifdef CLIENT_ONLY
   if ( argc != 3 ) {
