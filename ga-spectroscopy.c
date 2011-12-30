@@ -1728,7 +1728,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   /* Compute bin fitnesses using w*|X_o - X_c|^2 + (1-w)*|N_o - N_c|^2 */
   for ( i=0; i<scaledbins; i++ ) {
     float comp = opts->distanceweight *
-      powf(fabs(obsbin[i]-compbin[i]),2) +
+      //powf(fabs(obsbin[i]-compbin[i]),2) +
+      powf((obsbin[i]>compbin[j]?.5:-1)*(obsbin[i]-compbin[i]),2) +
       (1-opts->distanceweight)*powf(fabs(obsbincount[i]-compbincount[i]),2);
     if ( binerror[i] < .01 ) binerror[i] = .01;
     fitness += comp*binweights[i]*binerror[i];
