@@ -29,9 +29,9 @@ $WHOST = $serverconf->{host} if $serverconf->{host};
 
 my $SPECDIR = '..';                         # CWD for ga-spectroscopy processes
 my $DATADIR = '../data';                    # Location of data directory
-my $DATAURL = "http://$WHOST:$WPORT/spec/data"; # URL of the same
+my $DATAURL = "http://:$WPORT/spec/data";   # URL of the same (default $WHOST)
 my $TEMPDIR = '../temp';                    # Location of a temporary location
-my $TEMPURL = "http://$WHOST:$WPORT/spec/temp"; # URL of the same
+my $TEMPURL = "http://:$WPORT/spec/temp";   # URL of the same (default $WHOST)
 my $APPDIR = '.';
 my $APPNAME = 'ga-spectroscopy.app';
 my $APPURL = "$TEMPURL/$APPNAME";
@@ -42,7 +42,12 @@ my $UPLOADURL = 'data:';
 my ($REMOTEDATADIR,$REMOTETEMPDIR) = ('data','temp');
 my $WUDURATION = 10;
 
-my $JOBSENDERTOKEN = Digest::MD5::md5_hex('DISTJOBS', 'gaspecdist', 'aptronym');
+# Load key for distserver. It is currently randomly generated each time the
+# distserver starts up.
+open F, '<', 'distserver.key' or die "Cannot load distserver.key: $!";
+my $JOBSENDERTOKEN = <F>;
+$JOBSENDERTOKEN =~ s/[\r\n]+$//;
+close F;
 die "No job-sender token" unless $JOBSENDERTOKEN;
 my $DISPATCHID = "gaspec-$$";
 
@@ -64,6 +69,7 @@ my @items = ();             # GA Individuals
 my @freeitems = ();         # List of free indexes for @items
 my $askingforworkers = 0;
 my $uniqclientid = 0;
+my $haveworkcache = -1;     # No work available
 
 #threads->create(\&mythread);
 mythread();
@@ -98,97 +104,7 @@ sub mythread {
                     elsif ( $l =~ m/^WORK(FINISHED|FAILED|REJECTED) (.+)/ ) {
                         my ($command,$json) = ($1,$2);
                         my $reply = from_json($json);
-                        # FIXME: Do some sanity checks
-                        my $source = -1;
-                        my $gasock = undef;
-                        my $receivedtime = Time::HiRes::time;
-                        my $fatal = 0;
-                        if ( $reply->{files} && @{$reply->{files}} ) {
-                            my ($valid, undef, $fn) = @{$reply->{files}[0]};
-                            my ($checksum, $buf);
-                            if ( $fn =~ m/^data:/ ) {
-                                my $u = URI->new($fn);
-                                $buf = $u->data;
-                            }
-                            else {
-                                $fn = "$INBOXDIR/$fn";
-                                $buf = '';
-                                if ( open F, '<', $fn ) {
-                                    binmode F;
-                                    $buf .= $_ while <F>;
-                                    close F;
-                                    unlink $fn;# unless $fatal;
-                                }
-                                else { warn "Open $fn failed: $!" }
-                            }
-                            $checksum = Digest::MD5::md5_hex($buf);
-                            if ( $checksum eq $valid ) {
-                                # Read the file
-                                while ($buf =~ m/([\s\S]*?\n)/g ) {
-                                    my $l = $1;
-                                    if ( $l =~ m/^ERROR/ ) {
-                                        print "ERROR LOG IN $fn\n";
-                                        $fatal = 1;
-                                        next;
-                                    }
-                                    elsif ( $fatal ) { print $l; next }
-                                    next unless $l =~ m/^F (\d+) (\S+) E/;
-                                    my ($item, $fitness) = ($1, $2);
-                                    next unless $items[$item]{workunit} eq $reply->{id};
-                                    $items[$item]{fitness} = $fitness;
-                                    $items[$item]{received}++;
-                                    $source = $items[$item]{source};
-                                    if ( !defined($source) || $source < 0 )
-                                        { warn "No gasock" }
-                                    $gasock = $socks{$source}{sock};
-                                    printf $gasock "F %d %s\n",
-                                        $items[$item]{origindex},
-                                        $items[$item]{fitness};
-                                    $items[$item] = undef;
-                                    push @freeitems, $item;
-                                }
-                            }
-                            else { warn "Checksum mismatch on $fn" }
-                        }
-                        else { warn "Error or no files on finished work" }
-                        if ( $fatal ) {
-                            # Get rid of this GA instance
-                            # FIXME
-                            warn "Fatal error on client";
-                        }
-                        # Look if we have more work to do or if we can report
-                        # the generation completed
-                        my $foundothers = 0;
-                        my $foundunreturned = 0;
-                        foreach my $item ( @items ) {
-                            next unless $item;
-                            # FIXME: Assumes numeric source IDs
-                            next if defined($source) && $source >= 0 and
-                                ( $item->{source} != $source );
-                            $foundothers = 1;
-                            next unless $item->{workunit} eq $reply->{id};
-                            next unless $item->{sent} > $item->{received};
-                            # Try sending again
-                            $foundunreturned = 1;
-                            $item->{sent} = 0; $item->{received} = 0;
-                            $item->{workunit} = ''; # FIXME multiple workunits
-                        }
-                        if ( !$foundothers ) {
-                            if ( !$gasock ) { warn "No gasock" }
-                            print $gasock "DONE\n";
-                        }
-                        # Update workerspeed
-                        if ( $source && !$foundunreturned ) {
-                            my $wu = $workunits{$reply->{id}};
-                            my $n = $wu->{nitems}/($receivedtime-$wu->{sent});
-                            $n = 1/60 if $n < 1/60;
-                            # FIXME: max speed?
-                            my $ws = $socks{$source}{workerspeed};
-                            $ws->{$wu->{worker}} = $n;
-                        }
-                        # Dispatch more work
-                        delete $workunits{$reply->{id}};
-                        TrySending();
+                        WorkReturned($sock, $command, $reply);
                     }
                 }
             }
@@ -199,6 +115,7 @@ sub mythread {
                 $socks{$id} = { id => $id, sock => $client, buf => '',
                                 uniqid => $uniqclientid,
                                 config => undef, configfile => undef,
+                                remaining => 0,
                                 files => [[get_app()]], workerspeed => {} };
                 $select->add($client);
             }
@@ -226,11 +143,134 @@ sub mythread {
     }
 }
 
+# Handle a returned workunit
+sub WorkReturned {
+    my ($sock, $command, $reply) = @_;
+    # FIXME: Do some sanity checks
+    my $source = -1;
+    my $gasock = undef;
+    my $receivedtime = Time::HiRes::time;
+    my $fatal = 0;
+    my $nreturned = 0;
+    if ( $reply->{files} && @{$reply->{files}} ) {
+        my ($valid, undef, $fn) = @{$reply->{files}[0]};
+        my ($checksum, $buf);
+        if ( $fn =~ m/^data:/ ) {
+            my $u = URI->new($fn);
+            $buf = $u->data;
+        }
+        else {
+            $fn = "$INBOXDIR/$fn";
+            $buf = '';
+            if ( open F, '<', $fn ) {
+                binmode F;
+                $buf .= $_ while <F>;
+                close F;
+                unlink $fn;# unless $fatal;
+            }
+            else { warn "Open $fn failed: $!" }
+        }
+        $checksum = Digest::MD5::md5_hex($buf);
+        if ( $checksum eq $valid ) {
+            # Read the file
+            while ($buf =~ m/([\s\S]*?\n)/g ) {
+                my $l = $1;
+                if ( $l =~ m/^ERROR/ ) {
+                    print "ERROR LOG IN $fn\n";
+                    $fatal = 1;
+                    next;
+                }
+                elsif ( $fatal ) { print $l; next }
+                next unless $l =~ m/^F (\d+) (\S+) E/;
+                my ($item, $fitness) = ($1, $2);
+                next unless defined($items[$item]);
+                next unless $items[$item]{workunit} eq $reply->{id};
+                $items[$item]{fitness} = $fitness;
+                $items[$item]{received}++;
+                # What job is this item from
+                $source = $items[$item]{source};
+                if ( !defined($source) || $source < 0 )
+                    { warn "No gasock"; $source = -1 }
+                # Return the item to that source
+                $gasock = $socks{$source}{sock};
+                printf $gasock "F %d %s\n",
+                    $items[$item]{origindex},
+                    $items[$item]{fitness};
+                $socks{$source}{remaining}--;
+                $nreturned++;
+                $items[$item] = undef;
+                push @freeitems, $item;
+            }
+        }
+        else { warn "Checksum mismatch on $fn" }
+    }
+    else { warn "Error or no files on finished work" }
+    if ( $fatal ) {
+        # Get rid of this GA instance
+        # FIXME
+        warn "Fatal error on client";
+    }
+    # Look if we have more work to do or if we can report
+    # the generation completed
+    if ( $workunits{$reply->{id}}{nitems} != $nreturned &&
+         $source >= 0 ) {
+        # Wrong number of items returned. Make sure no items are still
+        # allocated to this workunit.
+        warn "Wrong number of items returned\n";
+        foreach my $item ( @items ) {
+            next unless $item;
+            # FIXME: Assumes numeric source IDs
+            next if $item->{source} != $source;
+            #$foundothers = 1;
+            next unless $item->{workunit} eq $reply->{id};
+            next unless $item->{sent} > $item->{received};
+            # Try sending this item again
+            $nreturned = -1;
+            $item->{sent} = 0; $item->{received} = 0;
+            $item->{workunit} = ''; # FIXME multiple workunits
+            $haveworkcache = 0;
+        }
+    }
+    if ( $source >= 0 && $socks{$source}{remaining} <= 0 ) {
+        if ( $socks{$source}{remaining} != 0 )
+            { warn "Source $source has $socks{$source}{remaining} remaining" }
+        if ( !$gasock ) { warn "No gasock" }
+        print $gasock "DONE\n";
+    }
+    # Update workerspeed
+    if ( $source >= 0 && $nreturned > 0 ) {
+        my $wu = $workunits{$reply->{id}};
+        my $n = $wu->{nitems}/($receivedtime-$wu->{sent}); # items/second
+        $n = 1/60 if $n < 1/60;            # Use at least one item/minute
+        # FIXME: max speed?
+        my $ws = $socks{$source}{workerspeed};
+        # Average worker speeds to better accommodate EC2 micro instances
+        $ws->{$wu->{worker}} = ($ws->{$wu->{worker}}+$n)/2.0;
+    }
+    # Dispatch more work
+    delete $workunits{$reply->{id}};
+    TrySending();
+}
+
 sub get_app {
     my $appfile = "$APPDIR/$APPNAME";
     copy($appfile, "$TEMPDIR/$APPNAME")
         or warn "Can't copy $appfile to temp: $!";
     return (md5($appfile)||'', $APPURL, $APPNAME);
+}
+
+sub RemoveFileDependency {
+    # Remove a file requirement for a given job
+    my ($id, $fn) = @_;
+    my $n = @{$socks{$id}{files}};
+    for ( my $i = 0; $i < $n; $i++ ) {
+        if ( $socks{$id}{files}[$i][2] eq "$REMOTETEMPDIR/$fn" ) {
+            # Splice this element from the array and return
+            splice @{$socks{$id}{files}}, $i, 1;
+            return;
+        }
+    }
+    warn "Could not remove $fn from dependencies of sock $id";
 }
 
 sub HandleSocket {
@@ -239,14 +279,27 @@ sub HandleSocket {
         my $l = $1;
         print "G$id: $l\n" unless $l =~ m/^I /;
         if ( $l =~ m/^V .+$/ ) {
-            $socks{$id}{config} .= "$l\n";
+            my $configdata = $socks{$id}{config} . "$l\n";
             # Save config to file
-            (my $fh, $socks{$id}{configfile}) =
-                File::Temp::tempfile("$DISPATCHID-config-XXXXX", DIR => $TEMPDIR,
-                                     OPEN => 1, EXLOCK => 0, UNLINK => 0);
-            print $fh $socks{$id}{config};
+            my $fh;
+            if ( $socks{$id}{configfile} ) {
+                # Remove the existing configfile from the list of dependencies
+                my $fn = MakeRelPath($socks{$id}{configfile}, $TEMPDIR);
+                RemoveFileDependency($id, $fn);
+                # Open the existing configfile
+                open F, '>', $socks{$id}{configfile}
+                    or warn "Cannot write to $socks{$id}{configfile}";
+            }
+            else {
+                # Create and open a new configfile
+                ($fh, $socks{$id}{configfile}) =
+                    File::Temp::tempfile("$DISPATCHID-config-XXXXX",
+                                         DIR => $TEMPDIR, OPEN => 1,
+                                         EXLOCK => 0, UNLINK => 0);
+            }
+            print $fh $configdata;
             close $fh;
-            my $checksum = Digest::MD5::md5_hex($socks{$id}{config});
+            my $checksum = Digest::MD5::md5_hex($configdata);
             my $fn = MakeRelPath($socks{$id}{configfile}, $TEMPDIR);
             push @{$socks{$id}{files}},
                          [$checksum, "$TEMPURL/$fn", "$REMOTETEMPDIR/$fn"];
@@ -257,6 +310,7 @@ sub HandleSocket {
         }
         elsif ( $l =~ m/^I (\d+) (.+)$/ ) {
             my ($origindex, $values) = ($1, $2);
+            $socks{$id}{remaining}++;
             AppendItem({source => $id, origindex => $origindex, workunit => '',
                         values => $values, fitness => undef});
         }
@@ -274,9 +328,14 @@ sub HandleSocket {
                 my $gasock = $socks{$id}{sock};
                 print $gasock "DONE\n";
             }
-            else { TrySending() }
+            else {
+                $haveworkcache = 0;
+                TrySending();
+            }
         }
-        elsif ( !$socks{$id}{configfile} ) {
+        elsif ( $l =~ m/^CFG/ ) {
+            # If this configuration line specifies a file, locate the file
+            # and add it to our list of dependencies.
             if ( $l =~ m/^(CFG[A-Z0-9] (match|template|drfile) )(.+)/ ) {
                 my ($lineprefix, $type, $fn) = ($1, lc $2, $3);
                 # Determine our destination filename
@@ -302,6 +361,8 @@ sub HandleSocket {
                 }
                 $l = $lineprefix.$outfile;
             }
+            # FIXME: Remove duplicate configuration items (poss. incl. dependency files)
+            warn "Config-updating is untested\n" if $socks{$id}{configfile};
             $socks{$id}{config} .= "$l\n";
         }
     }
@@ -330,6 +391,9 @@ sub AppendItem {
 # Get the next individual we can send
 sub GetNextIndividual {
     my ($client, $from) = @_;
+    # Most common case: client=-1 (find any work from any GA). If this failed
+    # last time, return a cached response until we get more work.
+    return -1 if $client == -1 && $haveworkcache == -1;
     for ( my $i = $from+1; $i < @items; $i++ ) {
         if ( $items[$i] && $items[$i]{sent} == $items[$i]{received} &&
              ( $client < 0 || $items[$i]{source} == $client ) &&
@@ -337,6 +401,8 @@ sub GetNextIndividual {
              return $i;
          }
     }
+    # If no work is available whatsoever, cache this until we get more work.
+    $haveworkcache = -1 if $client == -1;
     return -1;
 }
 
@@ -351,8 +417,9 @@ sub SendWork {
     # Workerspeed varies based on GA run settings
     my $ws = $socks{$client}{workerspeed};
     my $duration = $WUDURATION+int(5*rand());
-    my $n = ( exists($ws->{$worker->{id}}) && $ws->{$worker->{id}} ) ?
-            $ws->{$worker->{id}} : 10/$duration;
+    $ws->{$worker->{id}} = 10/$duration
+        unless exists($ws->{$worker->{id}}) && $ws->{$worker->{id}};
+    my $n = $ws->{$worker->{id}};
     $n *= $duration;
 
     # Generate workunit ID

@@ -11,7 +11,7 @@ use warnings;
 use strict;
 
 # Configuration
-my $VERSION = 20111103;
+my $VERSION = 20120209;
 my $PORT = 9933;
 
 # Create listener socket
@@ -22,9 +22,11 @@ my $select = IO::Select->new($listener);
 local $SIG{'PIPE'} = 'IGNORE';
 
 # Start problem-specific portion
-#our $JOBSENDERTOKEN = Digest::MD5::md5_hex('DISTJOBS', $VERSION, $$, rand());
-my $JOBSENDERTOKEN = Digest::MD5::md5_hex('DISTJOBS', 'gaspecdist', 'aptronym');
+my $JOBSENDERTOKEN = Digest::MD5::md5_hex('DISTJOBS', $VERSION, $$, rand());
 print "TOKEN: $JOBSENDERTOKEN\n";
+open F, '>', 'distserver.key' or die "Cannot load distserver.key: $!";
+print F $JOBSENDERTOKEN,"\n";
+close F;
 
 my %workunits = ();
 my %workers = ();
@@ -32,6 +34,7 @@ my %clients = ();
 my %filenos = ();           # Convert fileno to socket ID
 my $nextid = 1;
 my $lastworkerdump = 0;     # Last time we saved the list of workers
+my $freeworkersince = 0;
 
 print "distserver ready\n";
 while ( 1 ) {
@@ -89,6 +92,8 @@ while ( 1 ) {
                         print $sock "WORKER $str\n";
                     }
                     else { print $sock "NOWORKERS\n" }
+                    # Somebody is using workers, so cancel pending broadcasts.
+                    $freeworkersince = 0;
                 }
                 elsif ( $l =~ m/^DISPATCH (.+)$/ ) {
                     my $json = $1;
@@ -147,6 +152,8 @@ while ( 1 ) {
                     }
                     else {
                         DeleteWorkunit($obj->{id}, $state, $json);
+                        # Update last-successfully-completed-workunit time
+                        $w->{seenwork} = time if $state eq 'FINISHED';
                     }
                 }
                 elsif ( $l =~ m/^WORKING (.+)$/ ) {
@@ -206,7 +213,8 @@ while ( 1 ) {
                         $clients{$id}{worker} = $ident;
                         $workers{$ident} =
                             { sock => $id, id => $ident, name => $name,
-                              threads => 0, assigned => 0, seen => time };
+                              threads => 0, assigned => 0, seen => time,
+                              seenwork => 0 };
                         # FIXME: Client should detect number of threads.
                         # FIXME: Check already-assigned jobs.
                         print $sock "OK I will now send you work\n";
@@ -222,7 +230,7 @@ while ( 1 ) {
     }
     # Probe workunits in case they are gone
     my $now = time;
-    my @k = keys %workunits;
+    my @k = keys %workunits; # Make a copy because we may modify the hash
     foreach my $k ( @k ) {
         my $deadline = ($workunits{$k}{obj}{duration}||15)*2;
         next unless $workunits{$k}{heartbeat}+$deadline < $now;
@@ -252,15 +260,25 @@ while ( 1 ) {
             # Do query
         }
     }
-    # Dump worker list
-    DumpWorkers() if time >= $lastworkerdump+60;
+    # Dump worker list every minute
+    DumpWorkers() if $now >= $lastworkerdump+60;
+    # If there's been an idle worker for a while and we've only told one
+    # dispatcher, tell the rest in case they have work.
+    NewWorker() if $freeworkersince > 0 && $now >= $freeworkersince+10;
 }
 
 sub DeleteWorkunit {
     my ($id, $status, $json) = @_;
     my $dispatcher = $workunits{$id}{source};
-    my $dispatchsock = $clients{$dispatcher}{sock};
-    print $dispatchsock "WORK$status $json\n" if $dispatchsock;
+    my $dispatchsock = exists($clients{$dispatcher}) ? $clients{$dispatcher}{sock} : undef;
+    if ( $dispatchsock ) {
+        print $dispatchsock "WORK$status $json\n";
+        # If this dispatcher doesn't have more work, this worker will remain
+        # idle until we broadcast its existance to all other dispatchers.
+        $freeworkersince = time;
+    }
+    # This dispatcher disappeared, alert all other dispatchers immediately.
+    else { NewWorker() }
     if ( exists($workers{$workunits{$id}{worker}}) ) {
         my $w = $workers{$workunits{$id}{worker}};
         $w->{assigned}-- unless $w->{assigned} <= 0;
@@ -288,6 +306,7 @@ sub NewWorker {
         my $c = $_->{sock};
         print $c "NEWWORKER\n" if $_->{kind} == 2;
     }
+    $freeworkersince = 0;
 }
 
 # Save a dump of all connected workers (for monitoring)
@@ -300,7 +319,7 @@ sub DumpWorkers {
     foreach my $id ( keys %workers ) {
         next unless exists($workers{$id}{name}) and defined($workers{$id}{name});
         next unless exists($workers{$id}{sock}) and defined($workers{$id}{sock});
-        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{threads}\n";
+        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{seenwork}\t$workers{$id}{threads}\n";
         if ( $workers{$id}{seen}+300 < $now ) {
             my $sock = $clients{$workers{$id}{sock}}{sock};
             print $sock "PING\n";

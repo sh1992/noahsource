@@ -24,7 +24,7 @@ use strict;
 my $HAVE_Win32_API = 0;
 eval 'use Win32::API; $HAVE_Win32_API = 1';
 
-our $VERSION = 20111103;
+our $VERSION = 20120209;
 my $USERAGENT = "distclient.pl/$VERSION";
 
 # Load server configuration
@@ -420,6 +420,15 @@ sub md5 {
     return $md5;
 }
 
+sub urlhosthack {
+    my ($url) = @_;
+    # Special hack: URLs with null hostnames (http://:9990/foo or
+    # http:///foo) will default the hostname to that of the distributed
+    # server, e.g. http://server:9990/foo and http://server/foo .
+    $url =~ s/^(\w+:\/\/)([\:\/])/$1$HOST$2/;
+    return $url;
+}
+
 sub DownloadFiles {
     my ($id) = @_;
     my $obj = $work{$id};
@@ -445,7 +454,7 @@ sub DownloadFiles {
         next if defined($checksum) and $checksum eq $valid;
         # Checksum did not match, so download the file
         $nfiles++;
-        if ( $url =~ m/^data:/ ) {
+        if ( $url =~ m/^data:/i ) {
             my $u = URI->new($url);
             # FIXME: Integrate to avoid code duplication
             open F, '>', $fn or return WorkFail($id, "Cannot save $fn");
@@ -459,7 +468,7 @@ sub DownloadFiles {
             }
         }
         else {
-            my $req = HTTP::Request->new(GET => $url);
+            my $req = HTTP::Request->new(GET => urlhosthack($url));
             $req->user_agent($USERAGENT);
             my $reqid = $async->add($req); # FIXME data: URI
             $fetch{$reqid} = [$valid, $fn];
@@ -606,7 +615,7 @@ sub UploadFiles {
             unlink $f; # Delete successfully uploaded file
         }
         else {
-            my $req = HTTP::Request->new(PUT => $url);
+            my $req = HTTP::Request->new(PUT => urlhosthack($url));
             $req->user_agent($USERAGENT);
             $req->content($buf);
             $req->encode('gzip') if length($buf) > 1024;

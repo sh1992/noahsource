@@ -34,6 +34,9 @@ sub Work {
     }
     close IN;
     close $fh;
+    # We can get rid of the population file now, since it's unique to this
+    # workunit.
+    unlink $popfile;
 
     # Create output file (FIXME: This should all happen in a real tempdir)
     (undef, my $outfn) =
