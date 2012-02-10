@@ -212,15 +212,14 @@ sub WorkReturned {
     }
     # Look if we have more work to do or if we can report
     # the generation completed
-    if ( $workunits{$reply->{id}}{nitems} != $nreturned &&
-         $source >= 0 ) {
+    if ( $workunits{$reply->{id}}{nitems} != $nreturned ) {
         # Wrong number of items returned. Make sure no items are still
         # allocated to this workunit.
         warn "Wrong number of items returned\n";
         foreach my $item ( @items ) {
             next unless $item;
             # FIXME: Assumes numeric source IDs
-            next if $item->{source} != $source;
+            next if $source >= 0 && $item->{source} != $source;
             #$foundothers = 1;
             next unless $item->{workunit} eq $reply->{id};
             next unless $item->{sent} > $item->{received};
