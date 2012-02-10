@@ -33,4 +33,5 @@ done
 cd ..
 
 # Build installer
-makensis distclient.nsi
+VER=`perl -nle 'print($1),last if m/^our \\$VERSION = (\d+)/' distclient.pl`
+makensis -DVERSION=$VER distclient.nsi

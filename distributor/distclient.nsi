@@ -15,7 +15,7 @@ OutFile "${SHORTNAME}.exe"
 
 LicenseData "LEGAL.txt"
 ; LicenseForceSelection checkbox
-BrandingText " "
+BrandingText "v${VERSION}"
 
 ; The default installation directory
 InstallDir "$LOCALAPPDATA\${SHORTNAME}"
