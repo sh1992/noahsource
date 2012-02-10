@@ -24,7 +24,7 @@ use strict;
 my $HAVE_Win32_API = 0;
 eval 'use Win32::API; $HAVE_Win32_API = 1';
 
-our $VERSION = 20120209;
+our $VERSION = 20120210;
 my $USERAGENT = "distclient.pl/$VERSION";
 
 # Load server configuration
@@ -281,7 +281,7 @@ sub SocketThread {
                     close($sock);
                     $sock = undef;
                     PostStatus(undef, mode => 'DISCONNECTED',
-                               error => defined($bytes) ? undef : $!);
+                               error => defined($bytes) ? 'Retrying' : $!);
                     last SOCKLOOP;
                 }
                 $lastseen = 0;
@@ -314,6 +314,10 @@ sub SocketThread {
                         print $sock "PONG\n";
                     }
                     elsif ( $l =~ m/^PONG/ ) { }
+                    elsif ( $l =~ m/^GOAWAY\s*(.*)/ ) {
+                        PostStatus(undef, mode => 'ERROR', error => $1 ||
+                                   'Rejected by server, no reason given.');
+                    }
                     #print "$l\n"; # FIXME
                 }
             }

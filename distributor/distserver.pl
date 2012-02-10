@@ -11,8 +11,12 @@ use warnings;
 use strict;
 
 # Configuration
-my $VERSION = 20120209;
+my $VERSION = 20120210;
 my $PORT = 9933;
+
+# Minimum client version; older clients will be jailed. They will not be sent
+# any work, and clients version >=20120210 will display an error message.
+my $MINCLIENT = 20120209;
 
 # Create listener socket
 my $listener = IO::Socket::INET->new
@@ -183,9 +187,13 @@ while ( 1 ) {
                     }
                 }
                 elsif ( $l =~ m/^THREADS (\d+)$/ ) {
-                    my $t = $1;
-                    NewWorker() if $t > $w->{threads};
-                    $w->{threads} = $t;
+                    if ( !$w->{jailed} ) {
+                        # Do not allow jailed clients to change number of
+                        # threads. This will keep us from sending them work.
+                        my $t = $1;
+                        NewWorker() if $t > $w->{threads};
+                        $w->{threads} = $t;
+                    }
                 }
                 elsif ( $l =~ m/^PING/ ) { print $sock "PONG\n" }
                 elsif ( $l =~ m/^PONG/ ) { }
@@ -214,12 +222,19 @@ while ( 1 ) {
                         $workers{$ident} =
                             { sock => $id, id => $ident, name => $name,
                               threads => 0, assigned => 0, seen => time,
-                              seenwork => 0 };
-                        # FIXME: Client should detect number of threads.
-                        # FIXME: Check already-assigned jobs.
-                        print $sock "OK I will now send you work\n";
-                        print $sock "QUERYWORK\n";
-                        NewWorker();
+                              seenwork => 0, jailed => 0 };
+                        if ( $sockver < $MINCLIENT ) {
+                            print $sock "GOAWAY\n";# Distributed Computing Client upgrade required.\n";
+                            print "Client $name has version $sockver; too old!\n";
+                            $workers{$ident}{jailed} = 1;
+                        }
+                        else {
+                            # FIXME: Client should detect number of threads.
+                            # FIXME: Check already-assigned jobs.
+                            print $sock "OK I will now send you work\n";
+                            print $sock "QUERYWORK\n";
+                            NewWorker();
+                        }
                     }
                 }
                 else {
