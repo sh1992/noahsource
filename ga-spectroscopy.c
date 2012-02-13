@@ -104,6 +104,8 @@ typedef struct {
   char *spcatbin;		/* SPCAT program file */
   unsigned int bins;		/* Number of bins */
   float binscale;               /* Scaling to apply each generation */
+  unsigned int randbins;        /* Use random binning */
+  unsigned int scaledbins;      /* Current bins, if changes each generation */
   float distanceweight;
   int stdoutfd, devnullfd;	/* File descriptors used to hide SPCAT output */
   datarow *observation;		/* Data storage for observation */
@@ -572,6 +574,9 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 47: /* binscale */
     ((specopts_t *)settings->ref)->binscale = atof(optarg);
     break;
+  case 58: /* random-bins */
+    ((specopts_t *)settings->ref)->randbins = 10;
+    break;
   default:
     printf("Aborting: %c\n",c);
     abort ();
@@ -756,6 +761,11 @@ int main(int argc, char *argv[]) {
      * Add this number (float) of bins each generation
      */
     {"binscale", required_argument, 0, 47},
+    /** --random-bins
+     *
+     * Use a random number of bins each generation
+     */
+    {"random-bins", no_argument, 0, 58},
     {0, 0, 0, 0}
   };
 #ifdef CLIENT_ONLY
@@ -791,6 +801,7 @@ int main(int argc, char *argv[]) {
       specopts.rangemax[i] = specopts.initialerror[i] = 0;
   specopts.errordecay = 0;
   specopts.binscale = 0;
+  specopts.randbins = 0;
   specopts.popfile = NULL;
   specopts.drfile = NULL;
   specopts.doubleres = NULL;
@@ -880,7 +891,8 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  if ( ( specopts.errordecay != 0 ) || ( specopts.binscale != 0 ) ) {
+  if ( ( specopts.errordecay != 0 ) || ( specopts.binscale != 0 ) ||
+       ( specopts.randbins != 0 ) ) {
     /* Do not enable caching if error decays */
     settings.usecaching = 0;
   }
@@ -1244,6 +1256,11 @@ int main(int argc, char *argv[]) {
              specopts.basename_out, errno);
       exit(1);
     }
+    /* Run the pre-generation handler */
+    if ( (rc = GA_starting_generation(&ga)) != 0 ) {
+      printf("Could not start generation, errno=%d\n", rc);
+      exit(1);
+    }
     /* Start read loop */
     for ( pos = 0; pos < popsize; pos++ ) {
       if ( pos >= ncompleted ) {
@@ -1388,11 +1405,6 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
   if ( terminating )
     qprintf(ga->settings, "Best result saved in %s\n", opts->basename_out);
 
-  /* Update bin size */
-  if ( opts->binscale != 0 ) {
-    int scaledbins = opts->bins + ga->generation * opts->binscale;
-    qprintf(ga->settings, "Now using %d bins\n", scaledbins);
-  }
   return 0;
 }
 
@@ -1436,6 +1448,31 @@ int GA_termination(const GA_session *ga) {
 }
 #endif /* not CLIENT_ONLY */
 
+int GA_starting_generation(GA_session *ga) {
+  specopts_t *opts = (specopts_t *)ga->settings->ref;
+  /* Update bin size */
+  int oldbins = opts->scaledbins;
+  opts->scaledbins = opts->bins;
+#ifndef CLIENT_ONLY
+  if ( opts->randbins != 0 ) { /* Random binning */
+    int32_t r = 0;
+    if ( random_r(&ga->rs, &r) ) return 1;
+    opts->scaledbins = opts->randbins + (r % opts->bins);
+  }
+#endif
+  if ( opts->binscale != 0 ) /* Scaled bins */
+    opts->scaledbins = opts->bins + ga->generation * opts->binscale;
+  if ( oldbins != opts->scaledbins ) {
+    qprintf(ga->settings, "Now using %d bins\n", opts->scaledbins);
+#ifndef CLIENT_ONLY
+    if ( ga->settings->distributor )
+      fprintf(ga->settings->distributor, "CFGS bins %u\nV %s\n",
+              opts->scaledbins, CHECKSUM);
+#endif
+  }
+  return 0;
+}
+
 typedef struct { unsigned int index; double total; } sortable_bin;
 
 int bin_comparator(const void *a, const void *b) {
@@ -1462,7 +1499,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   int rc = 0;
   /* int xi, yi; */
   double fitness;
-  int scaledbins = opts->bins + ga->generation * opts->binscale;
+  int scaledbins = opts->scaledbins;
   const double binsize = ((double)(opts->obsrangemax-opts->obsrangemin))/scaledbins;
   double obsbin[scaledbins], compbin[scaledbins];
   int obsbincount[scaledbins], compbincount[scaledbins];

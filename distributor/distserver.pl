@@ -224,14 +224,14 @@ while ( 1 ) {
                               threads => 0, assigned => 0, seen => time,
                               seenwork => 0, jailed => 0 };
                         if ( $sockver < $MINCLIENT ) {
-                            print $sock "GOAWAY\n";# Distributed Computing Client upgrade required.\n";
+                            print $sock "GOAWAY Distributed Computing Client upgrade required.\n";
                             print "Client $name has version $sockver; too old!\n";
                             $workers{$ident}{jailed} = 1;
                         }
                         else {
-                            # FIXME: Client should detect number of threads.
-                            # FIXME: Check already-assigned jobs.
+                            # Worker client.
                             print $sock "OK I will now send you work\n";
+                            # Is the client working on any jobs right now?
                             print $sock "QUERYWORK\n";
                             NewWorker();
                         }
@@ -262,7 +262,8 @@ while ( 1 ) {
         }
         elsif ( $workunits{$k}{queried} < $workunits{$k}{heartbeat} ) {
             print "Probing $k\n";
-            # FIXME: What if client is broken and never finishes?
+            # If client is broken and never finishes, we will eventually
+            # give up on it.
             $workunits{$k}{queried} = $now;
             $workunits{$k}{pestered}++;
             next unless exists($workers{$workunits{$k}{worker}});

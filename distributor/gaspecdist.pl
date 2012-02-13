@@ -226,7 +226,7 @@ sub WorkReturned {
             # Try sending this item again
             $nreturned = -1;
             $item->{sent} = 0; $item->{received} = 0;
-            $item->{workunit} = ''; # FIXME multiple workunits
+            $item->{workunit} = ''; # FIXME item in multiple workunits?
             $haveworkcache = 0;
         }
     }
@@ -286,7 +286,7 @@ sub HandleSocket {
                 my $fn = MakeRelPath($socks{$id}{configfile}, $TEMPDIR);
                 RemoveFileDependency($id, $fn);
                 # Open the existing configfile
-                open F, '>', $socks{$id}{configfile}
+                open $fh, '>', $socks{$id}{configfile}
                     or warn "Cannot write to $socks{$id}{configfile}";
             }
             else {
@@ -332,37 +332,56 @@ sub HandleSocket {
                 TrySending();
             }
         }
-        elsif ( $l =~ m/^CFG/ ) {
+        elsif ( $l =~ m/^(CFG[A-Z0-9]) (\S+)(?: (.+))?/ ) {
+            my ($type, $opt, $val) = ($1, $2, $3);
+            my @suffixes = ();
             # If this configuration line specifies a file, locate the file
             # and add it to our list of dependencies.
-            if ( $l =~ m/^(CFG[A-Z0-9] (match|template|drfile) )(.+)/ ) {
-                my ($lineprefix, $type, $fn) = ($1, lc $2, $3);
+            if ( $opt =~ m/^(match|template|drfile)$/ && defined($val) ) {
                 # Determine our destination filename
-                my (undef,undef,$outfile) = File::Spec->splitpath($fn);
+                my (undef,undef,$outfile) = File::Spec->splitpath($val);
                 $outfile = "$REMOTEDATADIR/$outfile";
                 # .INT+.VAR files
-                my @suffixes = ($type eq 'template') ? ('.int','.var') : ('');
+                @suffixes = ($opt eq 'template') ? ('.int','.var') : ('');
                 # Where is this data file really?
                 foreach my $suffix ( @suffixes ) {
-                    my $realfn = File::Spec->rel2abs($fn.$suffix, $SPECDIR);
+                    my $realfn = File::Spec->rel2abs($val.$suffix, $SPECDIR);
                     my $wwwfn = MakeRelPath($realfn, $DATADIR);
                     my $checksum = md5($realfn);
                     if ( !$checksum or !-e $realfn ) {
-                        warn "Error checksumming $fn=>$realfn or file does not exist (ID=$id config): $!";
+                        warn "Error checksumming $val=>$realfn or file does not exist (ID=$id config): $!";
                         next;
                     }
                     if ( $wwwfn =~ m/^\.\./ ) {
-                        warn "Data file $fn is not in $DATADIR";
+                        warn "Data file $val is not in $DATADIR";
                         next;
                     }
                     push @{$socks{$id}{files}},
                          [$checksum, "$DATAURL/$wwwfn", "$outfile$suffix"];
                 }
-                $l = $lineprefix.$outfile;
+                $val = $outfile;
             }
-            # FIXME: Remove duplicate configuration items (poss. incl. dependency files)
-            warn "Config-updating is untested\n" if $socks{$id}{configfile};
-            $socks{$id}{config} .= "$l\n";
+            # Remove existing configuration items
+            # Note: By default, perlre's $ will ignore newlines at the end of
+            #       the string.
+            if ( $socks{$id}{config} =~ s/(^|\n)CFG[A-Z0-9] $opt( ([^\n]*))?(\n|$)/$1/ &&
+                 @suffixes && $3 ) {
+                # Remove obsolete dependency files
+                my (undef,undef,$oldfile) = File::Spec->splitpath($3);
+                my $l = $socks{$id}{files};
+                foreach my $suffix ( @suffixes ) {
+                    my $thisfile = "$REMOTEDATADIR/$oldfile$suffix";
+                    my $removed = 0;
+                    for ( my $i = 0; $i < @$l; $i++ ) {
+                        if ( $l->[$i][2] eq $thisfile )
+                            { splice @$l, $i, 1; $removed++ }
+                    }
+                    warn "Remove $removed dependencies for $thisfile."
+                        if $removed != 1;
+                }
+            }
+            $socks{$id}{config} .= "$type $opt" .
+                                   (defined($val) ? " $val\n" : "\n");
         }
     }
 }
@@ -432,7 +451,7 @@ sub SendWork {
     do {
         last if $i < 0;
         $items[$i]{sent}++;
-        $items[$i]{workunit} = $wuid; # FIXME: Multi-dispatched?
+        $items[$i]{workunit} = $wuid; # FIXME: Item in multiple workunits?
         $c++; #push @wuitems, $i;
         $popfile .= "I $i $items[$i]{values}\n";
     } while ( $c < $n and ($i = GetNextIndividual($client, $i)) > -1 );

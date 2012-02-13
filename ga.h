@@ -323,6 +323,14 @@ extern int GA_random_segment(GA_session *ga, const unsigned int i,
  */
 extern int GA_finished_generation(const GA_session *ga, int terminating);
 
+/** Task to complete before each generation.
+ * (update options that change per-generation)
+ * In distributed mode, execute on both server and clients.
+ *
+ * \returns 0 for success, nonzero for error.
+ */
+extern int GA_starting_generation(GA_session *ga);
+
 /* \} */
 
 /* Gray code helper functions */

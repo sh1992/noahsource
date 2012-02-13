@@ -82,6 +82,10 @@ int GA_random_segment(GA_session *ga, const unsigned int i,
   return random_r(&ga->rs, r);
 }
 
+int GA_starting_generation(GA_session *ga) {
+  return 0;
+}
+
 int GA_finished_generation(const GA_session *ga, int terminating) {
   return 0;
 }

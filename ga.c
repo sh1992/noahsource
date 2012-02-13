@@ -215,6 +215,7 @@ int GA_init(GA_session *session, GA_settings *settings,
   }
   /* Evaluate final fitness for each individual */
   session->generation = 0;
+  if ( GA_starting_generation(session) != 0 ) return 89;
   if ( GA_checkfitness(session) != 0 ) return 90;
   /* Return success */
   return 0;
@@ -284,6 +285,7 @@ int GA_evolve(GA_session *session, unsigned int generations) {
     printf("\n");
     */
 
+    if ( GA_starting_generation(session) != 0 ) return 3;
     /* Check termination condition. */
     if ( GA_checkfitness(session) != 0 ) return 1;
     // Save output on each generation

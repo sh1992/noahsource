@@ -1,3 +1,14 @@
 temp/*
 tmp-gaspec*
-201?????
+./*201?????*
+ga-numbers
+ga-spectroscopy
+ga-spectroscopy-client
+*.exe
+*.res
+*.app
+distributor/server.conf
+distributor/workers.dat
+distributor/distserver.key
+distributor/out-*/
+distributor/app/

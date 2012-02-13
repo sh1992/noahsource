@@ -396,7 +396,7 @@ sub WorkThread {
             PostStatus($id, mode => 'UPLOADING', progress => 0,
                        range => scalar(@outfiles));
             my $reply = { id => $id, files => [UploadFiles($id, \@outfiles)] };
-            CleanupFiles($id);
+            #CleanupFiles($id);
             #PostStatus($id, mode => 'FINISHED', progress => 1, range => 1);
             PostStatus($id, mode => 'WAITING', progress => 0, range => 1);
             { lock(@finishedwork); push @finishedwork, shared_clone($reply) }
@@ -604,7 +604,7 @@ sub UploadFiles {
     foreach my $f ( @$outfiles ) {
         my $buf = '';
         open F, '<', $f or WorkFail($id, "Failed to read output file $f");
-        binmode F; # FIXME should use binmode, buffered IO
+        binmode F; # FIXME buffered IO?
         1 while sysread(F, $buf, 512, length($buf));
         close F;
         my $checksum = Digest::MD5::md5_hex($buf);
@@ -647,14 +647,15 @@ sub UploadFiles {
     return @reply;
 }
 
-sub CleanupFiles {
-    my ($id) = @_;
-    my $obj = $work{$id};
-    foreach my $f ( @{$obj->{files}} ) {
-        my ($valid, $url, $fn) = @$f;
-        # FIXME: The following is too much of a hack, need better scheme.
-        #unlink $fn if $fn =~ m/^temp/;
-    }
-}
+# App is responsible for cleaning up transient files (FIXME?)
+#sub CleanupFiles {
+#    my ($id) = @_;
+#    my $obj = $work{$id};
+#    foreach my $f ( @{$obj->{files}} ) {
+#        my ($valid, $url, $fn) = @$f;
+#        # FIXME: The following is too much of a hack, need better scheme.
+#        #unlink $fn if $fn =~ m/^temp/;
+#    }
+#}
 
 1;
