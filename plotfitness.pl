@@ -16,6 +16,7 @@ foreach my $fn ( @ARGV ) {
     my @gens = ();
     my $hasdynmut = 0;
     my $ytop = 0;
+    my ($sectot, $secgen) = (0, 0);
     while (<F>) {
         if ( m/DYNM (\d+) (?:AVG\s+(-?[.0-9]+))?(\s+A\s+(-?[.0-9]+)\s+B\s+(-?[.0-9]+)\s+D\s+(-?[.0-9]+)\s+R\s+(-?[.0-9]+))?/ ) {
             my ($gen,$mean,$x,$a,$b,$d,$r) = ($1,$2,$3,$4,$5,$6,$7);
@@ -33,6 +34,8 @@ foreach my $fn ( @ARGV ) {
             $ytop = int($max);
         }
         elsif ( m/AVRG (\d+)\s+(-?[.0-9]+)/ ) { $gens[$1]{avg} = $2 } # Old style
+        elsif ( m/Took ([.0-9]+) seconds \(([.0-9]+) sec\/gen\)/ )
+            { $sectot = $1; $secgen = $2 }
     }
     $ytop++;
 
@@ -61,7 +64,7 @@ set xrange [0:*]
 set y2range [0:.1]
 set y2tics 0,.05,.1
 set grid y2tics
-set xlabel "Generation"
+set xlabel "Generation (Took $sectot sec, $secgen sec/gen)"
 set ylabel "Fitness (0 is best)"
 set y2label "Mutation rate, 0-1"
 set style data lines
