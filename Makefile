@@ -5,8 +5,15 @@
 
 # We use gsl (GNU Scientific Library) for random numbers.
 # FIXME: Not by default. We should switch to a better random number generator.
-# This is currently useful because random_r is unavailable except in GNU libc.
-# GSL = -lgsl -lblas -DHAVE_GSL
+# This is currently set to use the same algorithm as GNU libc's random_r, which
+# notably supports only 31-bit output. Enable it if you don't have random_r.
+# GSL = `gsl-config --cflags --libs` -DHAVE_GSL
+
+# Some systems require additional CFLAGS
+# CFLAGS += -I/usr/local/include -L/usr/local/lib
+
+# Some systems have md5 instead of md5sum
+MD5SUM = 'md5sum || md5'
 
 GAFLAGS = -lpthread $(GSL)
 override CFLAGS += -Wall -DDEBUG -lm -g -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
@@ -34,7 +41,7 @@ ga-spectroscopy-client: $(DEPS) ga-spectroscopy.checksum.h ga-clientonly.h
 
 # Checksum file
 %.checksum.h: %.c ga.c
-	$(SHELL) -c '(echo "char *CHECKSUM = \""`cat $^ | md5sum | cut -d" " -f1`"\";") > $@'
+	$(SHELL) -c '(echo "char *CHECKSUM = \""`cat $^ | '$(MD5SUM)' | cut -c1-32`"\";") > $@'
 %.usage.h: %.c
 	perl generate-usage.pl $^
 
@@ -56,10 +63,10 @@ clean:
 	-rm -f ga-spectroscopy-client.c
 	-rm -rf doc/{html,latex}
 
-doc: Doxyfile *.c *.h .PHONY
+doc: Doxyfile *.c *.h
 	PATH=. ga-spectroscopy --help > doc/ga-spectroscopy.txt
 	doxygen Doxyfile
 	cp -p doc/mydoxygen.sty doc/latex
 	$(MAKE) -C doc/latex pdf
 
-.PHONY:
+.PHONY: all clean doc

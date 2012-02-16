@@ -157,8 +157,8 @@ char *make_spec_temp(char *dir) {
                   O_CREAT|O_EXCL|O_NOFOLLOW|O_WRONLY,S_IRUSR|S_IWUSR);
         if ( rc < 0 ) {
           if ( errno != EEXIST ) {
-            printf("Error opening temporary file %s, errno=%d\n",
-                   filename, errno);
+            printf("Error opening temporary file %s: %s\n",
+                   filename, strerror(errno));
             printf("Does directory %s exist? (--tempdir to change)\n", dir);
             return NULL;
           }
@@ -187,13 +187,13 @@ int load_spec_templates(specopts_t *opts) {
     sprintf(filename, "%s.%s", opts->template_fn, input_suffixes[i]);
     /* Load template */
     if ( ( fh = fopen(filename, "r") ) == NULL ) {
-      printf("Failed to open template file, errno=%d\n", errno);
+      printf("Failed to open template file: %s\n", strerror(errno));
       free(filename);
       return i+10;
     }
     fread(opts->template[i], sizeof(opts->template[i]), 1, fh);
     if ( ferror(fh) ) {
-      printf("Failed to read template file, errno=%d\n", errno);
+      printf("Failed to read template file: %s\n", strerror(errno));
       free(filename);
       return i+20;
     }
@@ -327,7 +327,7 @@ int load_spec_observation(specopts_t *opts) {
   FILE *fh;
   int rc = 0;
   if ( ( fh = fopen(opts->obsfile, "r") ) == NULL ) {
-    printf("Failed to open observation file, errno=%d\n", errno);
+    printf("Failed to open observation file: %s\n", strerror(errno));
     return 12;
   }
   rc = load_catfile(fh, &(opts->observation), &(opts->observationsize),
@@ -829,7 +829,7 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
   if ( ( config = fopen(argv[1], "r") ) == NULL ) {
-    printf("Could not open config file %s, errno=%d\n", argv[1], errno);
+    printf("Could not open config file %s: %s\n", argv[1], strerror(errno));
     exit(1);
   }
   {
@@ -926,16 +926,20 @@ int main(int argc, char *argv[]) {
     hints.ai_flags = AI_V4MAPPED | AI_ADDRCONFIG;
     rc = getaddrinfo(specopts.distributor, port, &hints, &result);
     if ( rc != 0 ) {
-      printf("Could not look up %s:%s, getaddrinfo returned %d\n",
-             specopts.distributor, port, rc);
+      printf("getaddrinfo %s:%s: %s\n",
+             specopts.distributor, port, gai_strerror(rc));
       exit(1);
     }
 
     /* Try to connect */
     for ( rp = result; rp != NULL; rp = rp->ai_next ) {
       sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-      if ( sock == -1 ) continue;
+      if ( sock == -1 ) {
+        printf("socket: %s\n", strerror(errno));
+        continue;
+      }
       if ( connect(sock, rp->ai_addr, rp->ai_addrlen) != -1 ) break;
+      printf("connect: %s\n", strerror(errno));
       close(sock);
     }
     if ( rp == NULL ) {
@@ -946,7 +950,7 @@ int main(int argc, char *argv[]) {
 
     /* Connected */
     if ( (settings.distributor = fdopen(sock, "r+")) == NULL ) {
-      printf("Could not open socket handle, errno=%d\n", errno);
+      printf("Could not open socket handle: %s\n", strerror(errno));
       exit(1);
     }
     fprintf(settings.distributor, "%s\nV %s\n", optlog+1, CHECKSUM);
@@ -1008,7 +1012,7 @@ int main(int argc, char *argv[]) {
     sprintf(filename, "%s.log%s", specopts.basename_out, compressext);
     /* Open the log file */
     if ( ( fh = fopen(filename, "w") ) == NULL ) {
-      printf("Failed to open log file, errno=%d\n", errno);
+      printf("Failed to open log file: %s\n", strerror(errno));
       free(filename);
       exit(1);
     }
@@ -1018,12 +1022,12 @@ int main(int argc, char *argv[]) {
       int pipes[2];
       int compresspid;
       if ( pipe(pipes) != 0 ) {
-        printf("Failed to create pipe for compression, errno=%d\n", errno);
+        printf("Failed to create pipe for compression: %s\n", strerror(errno));
         exit(1);
       }
       compresspid = fork();
       if ( compresspid == -1 ) {
-        printf("Failed for fork for compression, errno=%d\n", errno);
+        printf("Failed for fork for compression: %s\n", strerror(errno));
         exit(1);
       }
       else if ( compresspid == 0 ) {
@@ -1044,15 +1048,15 @@ int main(int argc, char *argv[]) {
         signal(SIGINT, SIG_IGN);
         /* Execute xz */
         execvp(argv[0], argv);
-        fprintf(stderr, "Failed to execute compressor %s, errno=%d\n",
-                argv[0], errno);
+        fprintf(stderr, "Failed to execute compressor %s: %s\n",
+                argv[0], strerror(errno));
         exit(1);
       }
       /* Close the log file and dup the pipe to STDOUT instead. */
       fclose(fh);
       close(pipes[0]);
       if ( ( fh = fdopen(pipes[1], "w") ) == NULL ) {
-        printf("Failed to open pipe to compressor, errno=%d\n", errno);
+        printf("Failed to open pipe to compressor: %s\n", strerror(errno));
       }
     }
     settings.logfh = fh;
@@ -1065,15 +1069,15 @@ int main(int argc, char *argv[]) {
   {
     FILE *devnull;
     if ( ( devnull  = fopen("/dev/null", "w") ) == NULL ) {
-      printf("Can't open /dev/null, errno=%d\n", errno);
+      printf("Can't open /dev/null: %s\n", strerror(errno));
       exit(1);
     }
     if ( ( specopts.stdoutfd = dup(fileno(stdout)) ) == -1 ) {
-      printf("Can't dup stdout, errno=%d\n", errno);
+      printf("Can't dup stdout: %s\n", strerror(errno));
       exit(1);
     }
     if ( ( specopts.devnullfd = fileno(devnull) ) == -1 ) {
-      printf("Can't get fileno of devnull, errno=%d\n", errno);
+      printf("Can't get fileno of /dev/null: %s\n", strerror(errno));
       exit(1);
     }
   }
@@ -1141,7 +1145,7 @@ int main(int argc, char *argv[]) {
     //specopts.doublereslen = 0;
     FILE *fh = fopen(specopts.drfile, "r");
     if ( fh == NULL ) {
-      qprintf(&settings, "Failed to open drfile, errno=%d\n", errno);
+      qprintf(&settings, "Failed to open drfile: %s\n", strerror(errno));
       return 1;
     }
     char *line = NULL; size_t linelen = 0;
@@ -1261,13 +1265,13 @@ int main(int argc, char *argv[]) {
     }
     /* Now open output file for writing */
     if ( ( outfile = fopen(specopts.basename_out, "w") ) == NULL ) {
-      printf("Could not open output file %s, errno=%d\n",
-             specopts.basename_out, errno);
+      printf("Could not open output file %s: %s\n",
+             specopts.basename_out, strerror(errno));
       exit(1);
     }
     /* Run the pre-generation handler */
     if ( (rc = GA_starting_generation(&ga)) != 0 ) {
-      printf("Could not start generation, errno=%d\n", rc);
+      printf("Could not start generation, rc=%d\n", rc);
       exit(1);
     }
     /* Start read loop */
@@ -1386,7 +1390,8 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
   char filename[128];
   snprintf(filename, sizeof(filename), "%s.pop", opts->basename_out);
   if ( ( fh = fopen(filename, "w") ) == NULL ) {
-    qprintf(ga->settings, "Failed to open pop output file, errno=%d\n", errno);
+    qprintf(ga->settings, "Failed to open pop output file: %s\n",
+            strerror(errno));
     return 10;
   }
   for ( p = 0; p < ga->settings->popsize; p++ ) {
@@ -1407,7 +1412,7 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
     }
   }
   if ( fclose(fh) ) {
-    qprintf(ga->settings, "Failed to close input file, errno=%d\n", errno);
+    qprintf(ga->settings, "Failed to close input file: %s\n", strerror(errno));
     return 11;
   }
 
@@ -1594,11 +1599,11 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
   i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
   if ( i != 0 ) {
-    printf("Failed to start spcat (--spcat to specify location)\n");
+    qprintf(ga->settings, "Failed to start spcat (--spcat to specify path)\n");
     return 11;
   }
   if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) ) {
-    printf("spcat did not return success\n");
+    qprintf(ga->settings, "spcat did not return success\n");
     return 10;
   }
 #endif
