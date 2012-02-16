@@ -151,13 +151,21 @@ char *make_spec_temp(char *dir) {
       int rc;
       int k;
       for ( k = 0; k < 2; k++ ) {
-	snprintf(filename, fnsize, "%s.%s", basename,
-		 k == 0 ? input_suffixes[j] : output_suffixes[j]);
-	rc = open(filename,
-		  O_CREAT|O_EXCL|O_NOFOLLOW|O_WRONLY,S_IRUSR|S_IWUSR);
-	if ( rc < 0 ) break;
-	touched++;
-	close(rc);
+        snprintf(filename, fnsize, "%s.%s", basename,
+                 k == 0 ? input_suffixes[j] : output_suffixes[j]);
+        rc = open(filename,
+                  O_CREAT|O_EXCL|O_NOFOLLOW|O_WRONLY,S_IRUSR|S_IWUSR);
+        if ( rc < 0 ) {
+          if ( errno != EEXIST ) {
+            printf("Error opening temporary file %s, errno=%d\n",
+                   filename, errno);
+            printf("Does the directory %s exist?\n", dir);
+            return NULL;
+          }
+          break;
+        }
+        touched++;
+        close(rc);
       }
       if ( rc < 0 ) break;
     }
