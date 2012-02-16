@@ -3,17 +3,23 @@
 # Makefile for project
 #
 
-override CFLAGS += -Wall -DDEBUG -lm -lpthread -g -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
+# We use gsl (GNU Scientific Library) for random numbers.
+# FIXME: Not by default. We should switch to a better random number generator.
+# This is currently useful because random_r is unavailable except in GNU libc.
+# GSL = -lgsl -lblas -DHAVE_GSL
+
+GAFLAGS = -lpthread $(GSL)
+override CFLAGS += -Wall -DDEBUG -lm -g -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
 all: ga-numbers ga-spectroscopy ga-spectroscopy-client
 
 # GA test program
-ga-numbers: CFLAGS += -DGA_segment=uint32_t -DGA_segment_size=32
+ga-numbers: CFLAGS += $(GAFLAGS) -DGA_segment=uint32_t -DGA_segment_size=32
 ga-numbers: DEPS = ga.c
 ga-numbers: $(DEPS) ga.usage.h ga.h
 
 # ga-spectroscopy
 SPECFLAGS = -DGA_segment=uint32_t -DGA_segment_size=32 -DTHREADS
-ga-spectroscopy: CFLAGS += $(SPECFLAGS)
+ga-spectroscopy: CFLAGS += $(GAFLAGS) $(SPECFLAGS)
 ga-spectroscopy: DEPS = ga.c
 ga-spectroscopy: $(DEPS) ga-spectroscopy.checksum.h ga.usage.h ga-spectroscopy.usage.h ga.h
 # spcat.a

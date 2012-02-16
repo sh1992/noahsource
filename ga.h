@@ -8,6 +8,9 @@
 #if THREADS
 #include <pthread.h>
 #endif
+#if HAVE_GSL
+#include <gsl/gsl_rng.h>
+#endif
 
 /* Library typedefs */
 
@@ -173,10 +176,15 @@ typedef struct GA_session_struct {
   /** Mutex to control access to fitness cache. */
   pthread_mutex_t cachemutex;
 #endif
+#if HAVE_GSL
+  /* Random number generator. */
+  gsl_rng *r;
+#else
   /** Random number generator state variable. */
   struct random_data rs;
   /** Random number generator state variable. */
   int32_t randtbl[32];
+#endif
 } GA_session;
 
 /* Library functions */
@@ -313,8 +321,8 @@ extern int GA_fitness_quick(const GA_session *ga, GA_individual *elem);
  *
  * \returns 0 for success, nonzero for error.
  */
-extern int GA_random_segment(GA_session *ga, const unsigned int i,
-                             const unsigned int j, int *r);
+extern GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
+                                    const unsigned int j);
 
 /** Task to complete after each generation.
  * (save state, output progress, etc.)
@@ -422,6 +430,16 @@ int lprintf(const GA_settings *settings, const char *format, ...);
  * \see qprintf, invisible_system
  */
 int tprintf(const char *format, ...);
+
+/** Generate a random number using the session's random number generator.
+ * Arbitrary range. Not thread-safe.
+ */
+unsigned int GA_rand(GA_session *session);
+
+/** Generate a random number using the session's random number generator.
+ * Double-precision floating-point in [0,1). Not thread-safe.
+ */
+double GA_rand_double(GA_session *session);
 
 #if THREADS
 /* Consider abandoning this mutex in favor of flockfile on */

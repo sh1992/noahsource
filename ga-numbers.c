@@ -77,9 +77,9 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
   return 1;
 }
 
-int GA_random_segment(GA_session *ga, const unsigned int i,
-                      const unsigned int j, int *r) {
-  return random_r(&ga->rs, r);
+GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
+                             const unsigned int j) {
+  return GA_rand(ga);
 }
 
 int GA_starting_generation(GA_session *ga) {

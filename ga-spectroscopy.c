@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <signal.h>
 #include "ga-spectroscopy.checksum.h"
 
 #if THREADS
@@ -1345,27 +1346,27 @@ int main(int argc, char *argv[]) {
 }
 
 #ifndef CLIENT_ONLY
-int GA_random_segment(GA_session *ga, const unsigned int i,
-                      const unsigned int j, int *r) {
+GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
+                             const unsigned int j) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
-  int rc = random_r(&ga->rs, r);
+  GA_segment r = GA_rand(ga);
   /*
   GA_segment ideal[] = {2094967296, 1600000000, 100000000};
   GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
   */
   if ( opts->popfile ) {
-    rc = 0; // Note that the random state will be completely different.
-    *r = grayencode(opts->popdata[i*SEGMENTS+j]);
+    // Note that the random state will be completely different.
+    r = grayencode(opts->popdata[i*SEGMENTS+j]);
   }
-  else if ( !rc && opts->userange[j] ) {
+  else if ( opts->userange[j] ) {
     unsigned int realr;
-    realr = (unsigned)((double)(*r)*(opts->rangemax[j]-opts->rangemin[j])
+    realr = (unsigned)((double)(r)*(opts->rangemax[j]-opts->rangemin[j])
                        /RAND_MAX)+opts->rangemin[j];
     //printf("%d\n", realr);
-    *r = grayencode(realr);
+    r = grayencode(realr);
     //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
   }
-  return rc;
+  return r;
 }
 
 int GA_finished_generation(const GA_session *ga, int terminating) {
@@ -1455,9 +1456,7 @@ int GA_starting_generation(GA_session *ga) {
   opts->scaledbins = opts->bins;
 #ifndef CLIENT_ONLY
   if ( opts->randbins != 0 ) { /* Random binning */
-    int32_t r = 0;
-    if ( random_r(&ga->rs, &r) ) return 1;
-    opts->scaledbins = opts->randbins + (r % opts->bins);
+    opts->scaledbins = opts->randbins + (GA_rand(ga) % opts->bins);
   }
 #endif
   if ( opts->binscale != 0 ) /* Scaled bins */

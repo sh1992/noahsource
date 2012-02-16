@@ -16,20 +16,10 @@
 #include "ga.h"
 #include "ga.usage.h"
 
-static int32_t randtbl[32] = {
-  3,
-  -1726662223, 379960547, 1735697613, 1040273694, 1313901226,
-  1627687941, -179304937, -2073333483, 1780058412, -1989503057,
-  -615974602, 344556628, 939512070, -1249116260, 1507946756,
-  -812545463, 154635395, 1388815473, -1926676823, 525320961,
-  -1009028674, 968117788, -123449607, 1284210865, 435012392,
-  -2017506339, -911064859, -370259173, 1132637927, 1398500161,
-  -205601318,
-};
-
 #if THREADS
 static void *GA_do_thread (void * arg);
 #endif
+static int GA_rand_init(GA_session *session, unsigned long int seed);
 static int astrcat(char **s, const char *append);
 
 int GA_defaultsettings(GA_settings *settings) {
@@ -91,12 +81,8 @@ int GA_init(GA_session *session, GA_settings *settings,
   memset(session, 0, sizeof(GA_session));
 
   /* Seed the PRNG */
-  memcpy(&session->randtbl, randtbl, sizeof(session->randtbl));
   qprintf(settings, "SEED %u\n", settings->randomseed);
-  /* Initialize random_r() to be the same as random(). This is how
-   * it's done in my version of libc (eglibc-2.11.1, Ubunu 10.04) */
-  if ( initstate_r(settings->randomseed, (char *)(session->randtbl),
-		   128, &session->rs) ) perror("initstate_r");
+  if ( GA_rand_init(session, settings->randomseed) != 0 ) return 10;
 
   /* Set the fields from the parameters */
   session->settings = settings;
@@ -127,24 +113,11 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->oldpop[i].gdsegments = malloc(segmentmallocsize);
     if ( !session->oldpop[i].gdsegments ) return 5;
 
-    /* Generate initial population */
-    do {
-      //printf("Generating initial pop %03d\n", i);
-      for ( j = 0; j < segmentcount; j++ ) {
-        int r;
-        /*
-        if ( random_r(&session->rs, &r) ) perror("random");
-        */
-        if ( GA_random_segment(session, i, j, &r) ) perror("random");
-        /* Insert new segment, also graydecode it. */
-        session->population[i].segments[j] = (GA_segment)r;
-        session->population[i].gdsegments[j] = graydecode((GA_segment)r);
-      }
-      session->population[i].fitness = 0;
-    } while ( !GA_fitness_quick(session, &session->population[i]) );
     /* Insert into sorted list */
     session->sorted[i] = i;
   }
+  /* Generate initial population */
+  GA_generate(session, 0);
   /* Allocate the fitness cache (freed in GA_cleanup) */
   if ( settings->usecaching ) {
     session->cachesize = 2*settings->popsize;
@@ -223,10 +196,7 @@ int GA_init(GA_session *session, GA_settings *settings,
 
 int GA_cleanup(GA_session *session) {
   unsigned int i, j;
-  /*
-    if ( random_r(&session->rs, &i) ) perror("random");
-    qprintf(session->settings, "RNDB %u\n", i);
-  */
+  /* qprintf(session->settings, "RNDB %u\n", GA_rand(session)); */
   for ( i = 0; i < session->settings->threadcount; i++ ) {
     GA_thread_free(&session->threads[i]);
   }
@@ -260,6 +230,11 @@ int GA_evolve(GA_session *session, unsigned int generations) {
     session->population = session->oldpop;
     session->oldpop = temp;
 
+    /* Bump generation (do before generating new population in order to
+     * prevent generation-0 (random generation) mode to be used for
+     * generation 1. */
+    session->generation++;
+
     /* Keep top 8 members of the old population. */
     for ( i = 0; i < session->settings->elitism; i++ ) {
       unsigned int j;
@@ -273,8 +248,6 @@ int GA_evolve(GA_session *session, unsigned int generations) {
        (Consider: Top half roulette wheel/Keep top 8?) */
     GA_generate(session, i);
 
-    /* Bump generation */
-    session->generation++;
     /* Display cache buckets */
     /*
     printf("BKTS %03d ", session->generation);
@@ -301,19 +274,15 @@ void GA_generate(GA_session *session, unsigned int i) {
   unsigned int ntimes = 0;
   for ( ; i < session->settings->popsize; /* See bottom of loop */ ) {
     unsigned int a, b, j;
-    /* Special case first generation */
+    /* Special case first generation (required to allow regeneration of
+     * rejected individuals) */
     if ( session->generation == 0 ) {
-      /* FIXME FIXME FIXME: Why is this code here? Its presence causes "generation 0" mode to be used for generations 0 and 1! 20110517 */
       do {
         for ( j = 0; j < session->population[i].segmentcount; j++ ) {
-          int r;
-          /*
-          if ( random_r(&session->rs, &r) ) perror("random");
-          */
-          if ( GA_random_segment(session, i, j, &r) ) perror("random");
+          GA_segment r = GA_random_segment(session, i, j);
           /* Insert new segment, also graydecode it. */
-          session->population[i].segments[j] = (GA_segment)r;
-          session->population[i].gdsegments[j] = graydecode((GA_segment)r);
+          session->population[i].segments[j] = r;
+          session->population[i].gdsegments[j] = graydecode(r);
         }
         session->population[i].fitness = 0;
       } while ( !GA_fitness_quick(session, &session->population[i]) );
@@ -324,21 +293,14 @@ void GA_generate(GA_session *session, unsigned int i) {
     a = GA_roulette(session);
     b = GA_roulette(session);
     for ( j = 0; j < session->population[i].segmentcount; j++ ) {
-      int afirst;
-      int bitpos;
-      GA_segment olda, oldb;
-      GA_segment newa, newb;
-      GA_segment mask;
-      if ( random_r(&session->rs, &afirst) ) perror("random");
-      if ( random_r(&session->rs, &bitpos) ) perror("random");
-      afirst = afirst%2;
-      bitpos = bitpos%GA_segment_size;
-      mask = (1<<bitpos)-1;
+      int afirst = GA_rand(session) % 2;
+      int bitpos = GA_rand(session) % GA_segment_size;
+      GA_segment mask = (1<<bitpos)-1;
       /* Crossover. Random split & recombine. */
-      olda = session->oldpop[afirst ? a : b].segments[j];
-      oldb = session->oldpop[afirst ? b : a].segments[j];
-      newa = (olda & (~mask)) | (oldb & mask);
-      newb = (oldb & (~mask)) | (olda & mask);
+      GA_segment olda = session->oldpop[afirst ? a : b].segments[j];
+      GA_segment oldb = session->oldpop[afirst ? b : a].segments[j];
+      GA_segment newa = (olda & (~mask)) | (oldb & mask);
+      GA_segment newb = (oldb & (~mask)) | (olda & mask);
 
       /*
       printf("\nNITM %03d %03d %03d %03d\n",
@@ -356,8 +318,7 @@ void GA_generate(GA_session *session, unsigned int i) {
             powf((double)(GA_segment_size-bitpos)/GA_segment_size,
                  session->settings->mutationweight);
           /* Mutation probability */
-          if ( random_r(&session->rs, &afirst) ) perror("random");
-          if ( !( (double)afirst/RAND_MAX < threshold ) ) continue;
+          if ( GA_rand_double(session) >= threshold ) continue;
           /* printf("FLIP %08x     ", (k == 0) ? newa : newb); */
           if ( k == 0 ) newa ^= mask;
           else newb ^= mask;
@@ -392,15 +353,12 @@ void GA_generate(GA_session *session, unsigned int i) {
 }
 
 unsigned int GA_roulette(GA_session *session) {
-  double index;
+  double index = GA_rand_double(session);
   unsigned int i;
   /* If all the choices have score 0, assign uniform nonzero scores to
    * all individuals. */
   double uniformroulette = 0;
   /* printf("rand %d\n",(int)(index*64)); */
-  int r;
-  if ( random_r(&session->rs, &r) ) perror("random");
-  index = 1.0*r/RAND_MAX;
   if ( session->fitnesssum <= 0 )
     uniformroulette = 1.0/session->settings->popsize;
   /* printf("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
@@ -1513,3 +1471,60 @@ timeval_diff(struct timeval *difference,
 
 } /* timeval_diff() */
 
+/* PRNG interface */
+#if HAVE_GSL
+/* Use GSL to reproduce the glibc2 random_r call. We can easily replace this
+ * with a different PRNG. */
+static int GA_rand_init(GA_session *session, unsigned long int seed) {
+  session->r = gsl_rng_alloc(gsl_rng_random_glibc2);
+  if ( !session->r ) return 1;
+  gsl_rng_set(session->r, seed);
+  return 0;
+}
+
+unsigned int GA_rand(GA_session *session) {
+  return (unsigned int)gsl_rng_get(session->r); /* unsigned long int */
+}
+
+double GA_rand_double(GA_session *session) {
+  return gsl_rng_uniform(session->r);
+}
+
+#else
+/* Initialize random_r */
+static int32_t randtbl[32] = {
+  3,
+  -1726662223, 379960547, 1735697613, 1040273694, 1313901226,
+  1627687941, -179304937, -2073333483, 1780058412, -1989503057,
+  -615974602, 344556628, 939512070, -1249116260, 1507946756,
+  -812545463, 154635395, 1388815473, -1926676823, 525320961,
+  -1009028674, 968117788, -123449607, 1284210865, 435012392,
+  -2017506339, -911064859, -370259173, 1132637927, 1398500161,
+  -205601318,
+};
+
+static int GA_rand_init(GA_session *session, unsigned long int seed) {
+  memcpy(&session->randtbl, randtbl, sizeof(session->randtbl));
+  /* Initialize random_r() to be the same as random(). This is how
+   * it's done in my version of libc (eglibc-2.11.1, Ubunu 10.04) */
+  if ( initstate_r(seed, (char *)(session->randtbl), 128, &session->rs) ) {
+    perror("initstate_r");
+    return 1;
+  }
+  return 0;
+}
+
+unsigned int GA_rand(GA_session *session) {
+  int r;
+  if ( random_r(&session->rs, &r) != 0 ) {
+    perror("random_r");
+    exit(1);
+  }
+  return (unsigned int)r;
+}
+
+double GA_rand_double(GA_session *session) {
+  return ((double)GA_rand(session))/RAND_MAX;
+}
+
+#endif
