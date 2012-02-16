@@ -159,7 +159,7 @@ char *make_spec_temp(char *dir) {
           if ( errno != EEXIST ) {
             printf("Error opening temporary file %s, errno=%d\n",
                    filename, errno);
-            printf("Does the directory %s exist?\n", dir);
+            printf("Does directory %s exist? (--tempdir to change)\n", dir);
             return NULL;
           }
           break;
@@ -1593,9 +1593,14 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
 #else
   snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
   i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
-  if ( i != 0 ) return 11;		/* Failed */
-  if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) )
-    return 10;		/* Subprocess did not exit normally. */
+  if ( i != 0 ) {
+    printf("Failed to start spcat (--spcat to specify location)\n");
+    return 11;
+  }
+  if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) ) {
+    printf("spcat did not return success\n");
+    return 10;
+  }
 #endif
 
   /* Read SPCAT output file */
