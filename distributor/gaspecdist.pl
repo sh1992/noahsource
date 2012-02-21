@@ -335,33 +335,12 @@ sub HandleSocket {
         elsif ( $l =~ m/^(CFG[A-Z0-9]) (\S+)(?: (.+))?/ ) {
             my ($type, $opt, $val) = ($1, $2, $3);
             my @suffixes = ();
-            # If this configuration line specifies a file, locate the file
-            # and add it to our list of dependencies.
+            # Some configuration lines will specify dependency files.
             if ( $opt =~ m/^(match|template|drfile)$/ && defined($val) ) {
-                # Determine our destination filename
-                my (undef,undef,$outfile) = File::Spec->splitpath($val);
-                $outfile = "$REMOTEDATADIR/$outfile";
                 # .INT+.VAR files
                 @suffixes = ($opt eq 'template') ? ('.int','.var') : ('');
-                # Where is this data file really?
-                foreach my $suffix ( @suffixes ) {
-                    my $realfn = File::Spec->rel2abs($val.$suffix, $SPECDIR);
-                    my $wwwfn = MakeRelPath($realfn, $DATADIR);
-                    my $checksum = md5($realfn);
-                    if ( !$checksum or !-e $realfn ) {
-                        warn "Error checksumming $val=>$realfn or file does not exist (ID=$id config): $!";
-                        next;
-                    }
-                    if ( $wwwfn =~ m/^\.\./ ) {
-                        warn "Data file $val is not in $DATADIR";
-                        next;
-                    }
-                    push @{$socks{$id}{files}},
-                         [$checksum, "$DATAURL/$wwwfn", "$outfile$suffix"];
-                }
-                $val = $outfile;
             }
-            # Remove existing configuration items
+            # Remove existing configuration items and dependency files.
             # Note: By default, perlre's $ will ignore newlines at the end of
             #       the string.
             if ( $socks{$id}{config} =~ s/(^|\n)CFG[A-Z0-9] $opt( ([^\n]*))?(\n|$)/$1/ &&
@@ -379,6 +358,30 @@ sub HandleSocket {
                     warn "Remove $removed dependencies for $thisfile."
                         if $removed != 1;
                 }
+            }
+            # If this configuration line specifies a file, locate the file
+            # and add it to our list of dependencies.
+            if ( @suffixes ) {
+                # Determine our destination filename
+                my (undef,undef,$outfile) = File::Spec->splitpath($val);
+                $outfile = "$REMOTEDATADIR/$outfile";
+                # Where is this data file really?
+                foreach my $suffix ( @suffixes ) {
+                    my $realfn = File::Spec->rel2abs($val.$suffix, $SPECDIR);
+                    my $wwwfn = MakeRelPath($realfn, $DATADIR);
+                    my $checksum = md5($realfn);
+                    if ( !$checksum or !-e $realfn ) {
+                        warn "Error checksumming $val=>$realfn or file does not exist (ID=$id config): $!";
+                        next;
+                    }
+                    if ( $wwwfn =~ m/^\.\./ ) {
+                        warn "Data file $val is not in $DATADIR";
+                        next;
+                    }
+                    push @{$socks{$id}{files}},
+                         [$checksum, "$DATAURL/$wwwfn", "$outfile$suffix"];
+                }
+                $val = $outfile;
             }
             $socks{$id}{config} .= "$type $opt" .
                                    (defined($val) ? " $val\n" : "\n");
