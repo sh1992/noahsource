@@ -1476,7 +1476,7 @@ timeval_diff(struct timeval *difference,
 /* Use GSL to reproduce the glibc2 random_r call. We can easily replace this
  * with a different PRNG. */
 static int GA_rand_init(GA_session *session, unsigned long int seed) {
-  session->r = gsl_rng_alloc(gsl_rng_random_glibc2);
+  session->r = gsl_rng_alloc(gsl_rng_mt19937);//gsl_rng_random_glibc2);
   if ( !session->r ) return 1;
   gsl_rng_set(session->r, seed);
   return 0;

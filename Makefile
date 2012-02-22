@@ -4,10 +4,7 @@
 #
 
 # We use gsl (GNU Scientific Library) for random numbers.
-# FIXME: Not by default. We should switch to a better random number generator.
-# This is currently set to use the same algorithm as GNU libc's random_r, which
-# notably supports only 31-bit output. Enable it if you don't have random_r.
-# GSL = `gsl-config --cflags --libs` -DHAVE_GSL
+GSL = `gsl-config --cflags --libs` -DHAVE_GSL
 
 # Some systems require additional CFLAGS
 # CFLAGS += -I/usr/local/include -L/usr/local/lib

@@ -584,7 +584,7 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
     ((specopts_t *)settings->ref)->binscale = atof(optarg);
     break;
   case 58: /* random-bins */
-    ((specopts_t *)settings->ref)->randbins = 10;
+    ((specopts_t *)settings->ref)->randbins = optarg ? atoi(optarg) : 10;
     break;
   default:
     printf("Aborting: %c\n",c);
@@ -774,7 +774,7 @@ int main(int argc, char *argv[]) {
      *
      * Use a random number of bins each generation
      */
-    {"random-bins", no_argument, 0, 58},
+    {"random-bins", required_argument, 0, 58}, /* FIXME: Optional, sensible default */
     {0, 0, 0, 0}
   };
 #ifdef CLIENT_ONLY
