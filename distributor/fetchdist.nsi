@@ -1,11 +1,12 @@
 ;
-; distclient.nsi - Installer for Windows build of Distributed Computing Client
+; fetchdist.nsi - Download and run Windows distclient Installer
 ;
 ; Built with NSIS.
 ;
 
 !define LONGNAME "Thesis@home Distributed Computing Client"
-!define SHORTNAME "distclient"
+!define SHORTNAME "fetchdist"
+!define HOSTNAME "ncf1333.network.ncf.edu"
 
 ; The name of the installer
 Name "${LONGNAME}"
@@ -13,12 +14,10 @@ Name "${LONGNAME}"
 ; The file to write
 OutFile "${SHORTNAME}.exe"
 
-LicenseData "LEGAL.txt"
-; LicenseForceSelection checkbox
-BrandingText "v${VERSION}"
+BrandingText " "
 
 ; The default installation directory
-InstallDir "$LOCALAPPDATA\${SHORTNAME}"
+InstallDir "$LOCALAPPDATA\distclient"
 
 ; Request application privileges for Windows 7 / Vista
 RequestExecutionLevel user
@@ -28,40 +27,35 @@ SetCompressor /SOLID lzma
 Icon "${NSISDIR}/Contrib/Graphics/Icons/box-install.ico"
 InstProgressFlags smooth
 XPStyle on
-
-;--------------------------------
-
-; Pages
-
-Page license
-;Page directory
-;Page components
 Page instfiles
-
-;--------------------------------
 
 ; The stuff to install
 Section "" ;No components page, name is not important
-    DetailPrint "Installing..."
+    DetailPrint "Downloading..."
     SetDetailsPrint listonly
     ; TODO: Use FindWindow and SendMessage to quit existing instance
 
     ; Set output path to the installation directory.
-    SetOutPath $INSTDIR
+    InitPluginsDir
+    SetOutPath $PLUGINSDIR
+    Delete "$OUTDIR\distclient.exe"
+    ClearErrors
+    NSISdl::download http://${HOSTNAME}:9990/spec/distclient.exe "$OUTDIR\distclient.exe"
 
-    File LEGAL.txt
-    File /r out-MSWin32/*
-
-    CreateShortCut "$DESKTOP\${LONGNAME}.lnk" "$INSTDIR\${SHORTNAME}.exe"
-
-    ; Autostart the client
     SetDetailsPrint both
-    DetailPrint "Starting ${LONGNAME}..."
+    DetailPrint "Installing..."
     SetDetailsPrint listonly
-    Exec "$INSTDIR\${SHORTNAME}.exe"
-    SetAutoClose true
-    Sleep 3000
+    ExecWait '"$OUTDIR\distclient.exe"' $0
 
+    IfErrors errornotify
+    SetAutoClose true
+    Goto noerror
+errornotify:
     SetDetailsPrint both
+    DetailPrint "An error occurred."
+    SetDetailsPrint listonly
+
+noerror:
+    Delete "$OUTDIR\distclient.exe"
 SectionEnd ; end the section
 
