@@ -43,8 +43,9 @@ if ( !$HOST || !$PORT ) {
 }
 
 # Detect system information (number of processors)
-my $processorcount = 1;
+my $processorcount = 0;
 my $platform = '';
+my $sysident = '';
 if ( $^O eq 'MSWin32' ) {
     die "Need Win32::API to collect system statistics on MSWin32"
         unless $HAVE_Win32_API;
@@ -58,17 +59,45 @@ if ( $^O eq 'MSWin32' ) {
     # void GetSystemInfo(LPSYSTEM_INFO lpSystemInfo);
     my $function = ( Win32::API->new('kernel32','GetNativeSystemInfo','P','V')
                      || Win32::API->new('kernel32','GetSystemInfo','P','V') )
-        or die "Can't access GetSystemInfo";
+        or die "Can't find GetNativeSystemInfo or GetSystemInfo";
     # Will this even work on 64-bit Perl?
     my $systemInfo = pack('L9',0,0,0,0,0,0,0,0,0);
     $function->Call($systemInfo);
+
     my $dwNumberOfProcessors = (unpack('L9', $systemInfo))[5];
     $processorcount = $dwNumberOfProcessors if ($dwNumberOfProcessors||0) > 0;
+
     # Determine processor architecture
     my $wProcessorArchitecture = (unpack('L9', $systemInfo))[0]>>16;
     if ( $wProcessorArchitecture == 9 ) { $platform = 'win64' } # 9 = AMD64
     else { $platform = 'win32' } # 0 = X86, 6=Itanium
+
+    # Get volume serial number for system directory, for system identification.
+    # While clonable, this is good enough for current purposes.
+    # UINT GetSystemDirectory(LPTSTR lpBuffer, UINT uSize);
+    $function = Win32::API->new('kernel32','GetSystemDirectory', 'PN','N')
+        or die "Can't access GetSystemDirectory";
+    my $windir = ' 'x1024;
+    my $rc = $function->Call($windir, 1023);
+    die "GetSystemDirectory failed: $rc" if $rc < 1 || $rc > 1022;
+    if ( $windir =~ /^([A-Za-z]):[\\\/]/ ) { $windir = uc "$1:\\" }
+    else { die "GetSystemDirectory error, rc=$rc\n" }
+
+    # BOOL GetVolumeInformation(LPCTSTR lpRootPathName,
+    # LPTSTR lpVolumeNameBuffer, DWORD nVolumeNameSize,
+    # LPDWORD lpVolumeSerialNumber, LPDWORD lpMaximumComponentLength,
+    # LPDWORD lpFileSystemFlags, LPTSTR lpFileSystemNameBuffer,
+    # DWORD nFileSystemNameSize);
+    $function = Win32::API->new('kernel32','GetVolumeInformation',
+                                'PPNPPPPN','N')
+        or die "Can't access GetVolumeInformation";
+    my $volumeSerialNumber = pack 'I', 0;
+    $function->Call($windir, 0, 0, $volumeSerialNumber, 0, 0, 0, 0)
+        or die "Can't retrieve volume information\n";
+    $volumeSerialNumber = unpack 'I', $volumeSerialNumber;
+    $sysident = sprintf "%s %08x", $windir, $volumeSerialNumber;
 }
+# On Linux, we can use /proc/cpuinfo to get the number of processors.
 elsif ( -r '/proc/cpuinfo' ) {
     # On Linux, use procfs to find out how many CPUs we have
     open F, '<', '/proc/cpuinfo' or die "Cannot open /proc/cpuinfo";
@@ -77,7 +106,30 @@ elsif ( -r '/proc/cpuinfo' ) {
     }
     close F;
 }
-if ( $^O eq 'linux' ) {
+# On BSD, fall back to sysctl -n hw.ncpu to determine number of processors.
+if ( !$processorcount ) {
+    my $sysctl = -x '/sbin/sysctl' ? '/sbin/sysctl' :
+           ( -x '/usr/bin/sysctl' ? '/usr/bin/sysctl' : '');
+    if ( $sysctl and (open SYSCTL, '-|', $sysctl, '-n', 'hw.ncpu') ) {
+        my $str = <SYSCTL>;
+        if ( close(SYSCTL) and ($str||'') =~ m/^(\d+)/ and $1+0 > 0 )
+            { $processorcount = $1+0 }
+    }
+}
+# Well, we have at least one CPU.
+$processorcount = 1 unless $processorcount;
+
+# For system identification on Linux, try the DBUS machine ID file,
+# /var/lib/dbus/machine-id, which should be persistant on standard systems.
+my $sysidfile = '/var/lib/dbus/machine-id';
+if ( !$sysident && -f $sysidfile && open F, '<', $sysidfile ) {
+    my $id = <F>;
+    $sysident = "$sysidfile $1" if ($id||'') =~ m/([-0-9a-fA-F]+)/;
+    close F;
+}
+
+if ( $^O eq 'linux' || $^O =~ m/bsd$/ ) {
+    # In case of BSD, assume Linux emulation. FIXME: Test on FreeBSD.
     my $uname = `uname -m`;
     $uname =~ s/\s//g;
     $uname = 'x86' if $uname =~ m/^i[0-9]86$/;
@@ -90,7 +142,9 @@ $platform ||= 'all';
 my $hostname = hostname;
 
 print "$hostname has $processorcount processors\n";
-my $myident = Digest::MD5::md5_hex($hostname); # FIXME: System UUID, etc.
+$sysident = $sysident ? join(' ', $hostname, $sysident) : $hostname;
+my $myident = Digest::MD5::md5_hex($sysident);
+print "$hostname has identifier $myident\n  (based on $sysident)\n";
 
 our $THREADCOUNT = $processorcount;
 #if ( $^O eq 'MSWin32' ) { }
