@@ -10,7 +10,7 @@ GSL = `gsl-config --cflags --libs` -DHAVE_GSL
 # CFLAGS += -I/usr/local/include -L/usr/local/lib
 
 # Some systems have md5 instead of md5sum
-MD5SUM = 'md5sum || md5'
+MD5SUM = '(md5sum || md5)'
 
 GAFLAGS = -lpthread $(GSL)
 override CFLAGS += -Wall -DDEBUG -lm -g -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
