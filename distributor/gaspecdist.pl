@@ -114,7 +114,7 @@ sub mythread {
                 $uniqclientid++;
                 $socks{$id} = { id => $id, sock => $client, buf => '',
                                 uniqid => $uniqclientid,
-                                config => undef, configfile => undef,
+                                config => '', configfile => undef,
                                 remaining => 0,
                                 files => [[get_app()]], workerspeed => {} };
                 $select->add($client);
