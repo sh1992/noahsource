@@ -1,0 +1,96 @@
+#!/usr/bin/perl -T
+#
+# xmpp-tunnel-watchdog - Monitor tunnel connection status.
+#
+# This is designed to be run as a forced SSH command. It will output a ping
+# every $interval seconds and exit if it receives nothing for $timeout seconds.
+# When exiting, it will try to shut down the tunnel by killing its parent SSHd.
+#
+
+use IO::Select;
+use IO::Socket::UNIX;
+use warnings;
+use strict;
+
+die "You shouldn't run this as root.\n" unless $>;
+$ENV{PATH} = '/usr/local/bin:/usr/bin:/bin';
+
+# Load the configuration file
+my $conf = shift(@ARGV);
+die "Usage: xmpp-tunnel-watchdog <conf>\n" unless $conf;
+open F, '<', $conf or die;
+my %options = ();
+while (<F>) {
+    next if m/^\s*[^a-zA-Z]/;
+    next unless m/^(interval|watchdogsocket)\s(.+?)\s+$/i;
+    $options{lc $1} = $2;
+}
+close F;
+$_ = '';
+
+die "Configuration is incomplete.\n"
+    unless $options{interval} and $options{interval} > 1 and
+           $options{watchdogsocket};
+my $interval = $options{interval};
+my $timeout = $interval*5;
+
+# Receive or generate session identifier
+my $sessionid = $ENV{SSH_ORIGINAL_COMMAND} || $$;
+$sessionid =~ m/ID=([a-zA-Z0-9]+)/i;
+$sessionid = $1||$$;
+
+# Connect to the watchdog message socket
+my $sock = IO::Socket::UNIX->new(Peer => $options{watchdogsocket})
+    or quit("Can't open watchdog socket: $!");
+print $sock "HELLO $sessionid\n";
+
+my ($lastsend,$lastreceive) = (time, time);
+my $select = IO::Select->new(*STDIN, $sock);
+my $buf = '';
+
+while ( 1 ) {
+    my $now = time;
+    foreach ( $select->can_read($interval) ) {
+        quit("Got notification from watchdog socket.") if $_ eq $sock;
+        $lastreceive = $now if sysread($_, $buf, 128);
+    }
+    if ( $now > $lastsend+$interval ) {
+        syswrite(STDOUT, "\n");
+        $lastsend = time;
+    }
+    quit("Timed out after $timeout seconds.") if $now > $lastreceive+$timeout;
+}
+quit();
+
+sub quit {
+    print STDERR @_,"\n";
+    # If we were started by SSH, try to kill our SSHd
+    my $ppid = 0;
+    if ( open F, '<', "/proc/$$/stat" ) {
+        m/^\s*\S+\s+(?:\S+|\(.*\))\s+\S+\s+(\d+)\s+/ and $ppid = $1 while <F>;
+        close F;
+    }
+    elsif ( open F, '-|', 'ps', '-o', 'ppid', $$ ) {
+        m/(\d+)/ and $ppid = $1 while <F>;
+        close F;
+    }
+    # Did we find a parent PID?
+    exit if !$ppid or $ppid <= 1;
+    my $kill = 0;
+    if ( open F, '<', "/proc/$ppid/stat" ) {
+        m/^\s*\S+\s+\(sshd/ and $kill = 1 while <F>;
+        close F;
+    }
+    elsif ( open F, '-|', 'ps', '-o', 'comm', $ppid ) {
+        m/^\s*sshd/ and $kill = 1 while <F>;
+        close F;
+    }
+    # Kill the SSHd
+    kill 15, $ppid if $kill;
+    zap();
+}
+
+sub zap {
+    close $sock if $sock;
+    exit 0;
+}

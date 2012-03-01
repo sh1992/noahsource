@@ -1,0 +1,345 @@
+#!/usr/bin/perl
+#
+# xmpp-tunnel.pl - Establish SSH reverse tunnels with XMPP-based mediation
+#
+# Installation instructions:
+# - Server must be configured with an identity file (SSH private key)
+# - Clients must have the matching public key listed in authorized_keys as
+#   follows:
+#   command="/.../xmpp-tunnel-watchdog /.../config" ssh-rsa AAAA...== comment
+#
+
+use IO::Socket::UNIX;
+use IO::Select;
+use IPC::Open2;
+use Net::XMPP;
+use Digest::MD5 qw/md5_hex/;
+use LWP::Simple;
+use warnings;
+use strict;
+
+# Load the configuration file
+my $conf = shift(@ARGV);
+die "Usage: xmpp-tunnel <conf>\n" unless $conf;
+open F, '<', $conf or die;
+my %options = ( permit => {}, request => {}, sshport => 22,
+                resource => sprintf("%08x", int(rand()*0x7fffffff)),
+              );
+while (<F>) {
+    next if m/^\s*[^a-zA-Z]/;
+    s/[\r\n]+$//;
+    my ($option,$value) = split ' ', $_, 2;
+    $option = lc $option;
+    if ( $option eq 'permit' or $option eq 'request' ) {
+        my ($user, @ports) = split ' ', $value;
+        $options{$option}{lc $user} = [@ports];
+    }
+    else { $options{$option} = $value }
+}
+close F;
+
+die "Configuration is incomplete.\n"
+    unless $options{interval} and $options{interval} > 1;
+my $interval = $options{interval};
+my $timeout = $interval*5;
+
+my $sock = undef;
+my $select = IO::Select->new();
+my %socks = ();
+my %tunnels = ();
+my %requests = ();
+my $nrequests = keys %{$options{request}};
+my $erequests = 0;
+my $ipaddr = undef;
+my $isclient = keys %{$options{request}};
+my $isserver = keys %{$options{permit}};
+$SIG{CHLD} = 'IGNORE';
+
+die "Client configuration is incomplete.\n"
+    if $isclient and not ($options{sshuser} and $options{watchdogsocket});
+die "Server configuration is incomplete.\n"
+    if $isserver and not ($options{sshidentity} and -r $options{sshidentity});
+
+# Set up request list
+foreach my $user ( keys %{$options{request}} ) {
+    my $ident = md5_hex($user);
+    $requests{$ident} = { user => $user, lastattempt => 0, nattempts => 0,
+                         ident => $ident, watchdog => undef };
+}
+
+# Listen for tunnel watchdogs
+if ( exists($options{watchdogsocket}) ) {
+    unlink $options{watchdogsocket};
+    $sock = IO::Socket::UNIX->new(Local => $options{watchdogsocket},
+                                     Listen => 1)
+        or die "Can't listen on $options{watchdogsocket}: $!";
+    $select->add($sock);
+}
+
+# Set up the XMPP client object
+my $X;
+
+MAIN:
+while ( 1 ) {
+    # Connect to the XMPP server
+    handle_sockets(0);
+    print "Connecting to $options{server}...\n";
+    $X = new Net::XMPP::Client();
+    $X->SetCallBacks(message => \&GotMessage, onauth => \&Start);
+    my $status = $X->Connect(hostname=>$options{server});
+    unless ( defined($status) ) {
+        warn "Connection failed: $!";
+        next;
+    }
+
+    # Authenticate to the XMPP server
+    handle_sockets(0);
+    print "Logging in as $options{username}/$options{resource}...\n";
+    my @result = $X->AuthSend(username=>$options{username},
+                              password=>$options{password},
+                              resource=>$options{resource});
+    unless ( $result[0] eq "ok" ) {
+        warn "Authorization failed: $result[0] - $result[1]";
+        next;
+    }
+
+    # Get my IP address
+    if ( $isclient ) {
+        print "Checking IP address...\n";
+        # Can use http://169.254.169.254/latest/meta-data/public-ipv4 on EC2
+        foreach my $url ( 'http://getip.dyndns.org/', 'http://icanhazip.com/',
+                          'http://automation.whatismyip.com/n09230945.asp' ) {
+            handle_sockets(0);
+            $ipaddr = get($url); # From LWP::Simple
+            # Find an IP address in the page somewhere
+            if ( defined($ipaddr) and
+                 $ipaddr =~ m/((?:[12]?\d?\d\.){3}[12]?\d?\d)/ ) {
+                 $ipaddr = $1;
+                 last;
+             }
+             $ipaddr = undef;
+        }
+        next unless $ipaddr;
+        print "Found IP address: $ipaddr\n";
+    }
+
+    # Handle messages
+    print "Connected.\n";
+    handle_sockets(0);
+    while ( defined($X->Process(1)) ) {
+        #last MAIN if $done && (time > $done);
+        handle_sockets(0);
+        handle_requests() if $isclient;
+    }
+}
+continue {
+    print 'Disconnecting at ',scalar localtime,".\n";
+    $X->Disconnect();
+    $ipaddr = undef;
+    print "Sleeping before reconnecting...\n";
+    handle_sockets(1) foreach 1..10;
+}
+
+sub handle_sockets {
+    my ($time) = @_;
+    # Handle ready sockets
+    foreach my $s ( $select->can_read($time) ) {
+        # Accept new watchdog connections
+        if ( $sock and $s eq $sock ) {
+            $s = $sock->accept();
+            $socks{$s} = { type => 'watchdog', sock => $s, ident => undef,
+                           buf => '' };
+            $select->add($s);
+            next;
+        }
+        # Read pending data
+        my $obj = $socks{$s};
+        my $rc = sysread($obj->{sock}, $obj->{buf}, 1024, length($obj->{buf}));
+        if ( !$rc ) {
+            delete($socks{$obj->{sock}});
+            if ( $obj->{type} eq 'ssh' ) {
+                delete($tunnels{$obj->{user}});
+                close($obj->{writeto})
+            }
+            elsif ( $obj->{type} eq 'watchdog' and $obj->{ident} ) {
+                $erequests--;
+                $requests{$obj->{ident}}{watchdog} = undef;
+            }
+            $select->remove($obj->{sock});
+            close($obj->{sock});
+        }
+        if ( $obj->{type} eq 'ssh' ) {
+            $obj->{buf} = '';
+            $obj->{lastrecv} = time if $obj->{lastrecv};
+        }
+        else {
+            # Handle data received from socket
+            while ( $obj->{buf} =~ s/^([^\r\n]+)[\r\n]+// ) {
+                my $l = $1;
+                print $l, "\n";
+                if ( $obj->{type} eq 'watchdog' ) {
+                    if ( $l =~ m/^hello\s+(.+)$/i ) {
+                        my $ident = $1;
+                        next unless exists($requests{$ident});
+                        print "Got watchdog for $ident\n";
+                        $erequests++ unless $obj->{ident};
+                        $obj->{ident} = $ident;
+                        $requests{$ident}{lastattempt} = 0;
+                        $requests{$ident}{nattempts} = 0;
+                        $requests{$ident}{watchdog} = scalar($obj->{sock});
+                    }
+                }
+            }
+        }
+        # Final cleanup
+        delete $socks{$s} unless $rc;
+    }
+    # Send keepalives and check timeouts on our open tunnels.
+    my $now = time;
+    foreach my $s ( values %socks ) {
+        next if $s->{type} ne 'ssh';
+        if ( $s->{lastsend}+$interval < $now ) {
+            # Send keepalive to the client
+            print { $s->{writeto} } "\n";
+            $s->{lastsend} = time;
+        }
+        elsif ( $s->{lastrecv}+$timeout < $now ) {
+            # We have not gotten a keepalive for some time
+            stop_ssh($s);
+        }
+    }
+}
+
+sub handle_requests {
+    return if $erequests == $nrequests;
+    die "Too many existing requests!" if $erequests > $nrequests;
+    foreach my $req ( values %requests ) {
+        next if $req->{watchdog};
+        # Check request
+        if ( $req->{lastattempt}+60*$req->{nattempts} < time ) {
+            $req->{nattempts}++;
+            $req->{lastattempt} = time;
+            # Compose request message
+            my $message = join(' ', $req->{ident}, $options{sshuser} . '@' .
+                               $ipaddr . ':' . $options{sshport},
+                               @{$options{request}{$req->{user}}});
+            print "Sending request $req->{nattempts} to $req->{user} at ",
+                  scalar localtime, ":\n";
+            print $message,"\n";
+            $X->MessageSend(to => $req->{user}, body => $message);
+        }
+    }
+}
+
+# Launch an SSH tunnel process
+sub launch_ssh {
+    my ($user, $ident, $host, @forwards) = @_;
+    while ( exists($tunnels{$user}) ) {
+        stop_ssh($socks{$tunnels{$user}});
+    }
+    my $port = 22;
+    $port = $2+0 if $host =~ s/(\]|^[^:]+):(\d+)$/$1/;
+    $host =~ s/\[(.+)\]/$1/; # Wrap IPv6 address in [] if you specify a port.
+    my @command = ('ssh', '-oStrictHostKeyChecking=no', '-i',
+                   $options{sshidentity}, '-oUserKnownHostsFile=/dev/null',
+                   '-p', $port, @forwards, $host, '/bin/false', 'ID='.$ident);
+    print 'Running ',join(' ',@command),"\n";
+    local %ENV = ( PATH => '/usr/local/bin:/usr/bin:/bin' );
+    my $pid = open2(my $out, my $in, @command);
+    if ( !$pid || $pid <= 1 ) {
+        return 0;
+    }
+    $socks{$out} = { type => 'ssh', sock => $out, writeto => $in, pid => $pid,
+                     lastsend => time, lastrecv => time, kills => 0,
+                     user => $user, ident => $ident, buf => ''};
+    $tunnels{$user} = $out;
+    $select->add($out);
+    return 1;
+}
+
+# Stop an SSH process. May need to call repeatedly until cleanup is completed
+sub stop_ssh {
+    my ($s) = @_;
+    print "Stopping SSH client for $s->{ident}\n";
+    kill $s->{kills} > 3 ? 15 : 9, $s->{pid};
+    $s->{lastrecv} = 0;
+    $s->{kills}++;
+    if ( $s->{kills} > 5 ) {
+        # The SSH process is not exiting. Cleanup anyway.
+        delete($socks{$s->{sock}});
+        delete($tunnels{$s->{user}});
+        $select->remove($s->{sock});
+        close($s->{writeto});
+        close($s->{sock});
+    }
+}
+
+sub GotMessage {
+    my $sid = shift;
+    my $message = shift;
+
+    my $from = lc $message->GetFrom();
+    my $type = $message->GetType()||'normal';
+    my $body = $message->GetBody();
+
+    print '=== ', scalar localtime, "\n";
+    print "Message ($type) from $from:\n$body\n";
+    print "===\n";
+    print $message->GetXML(),"\n";
+    print "===\n";
+
+    return if $type eq 'error' or not $from or not $body;
+
+    # Determine permissions for sender
+    my $permissions = undef;
+    $permissions = [] if exists($options{request}{from});
+    foreach ( keys %{$options{permit}} ) {
+        if ( globmatch($_, $from) ) {
+            $permissions = $options{permit}{$_};
+            last;
+        }
+    }
+    unless ( defined($permissions) ) {
+        print "Sender does not match any permitted ID.\n";
+        return;
+    }
+
+    # Parse body
+    $body =~ s/^\s*|\s*$//g;
+    $body =~ s/\s+/ /g;
+    if ( $body =~ m/^help$/i ) {
+        $X->MessageSend(to => $from,
+                        body => 'no help available');
+        return;
+    }
+    # FIXME: Challenge-response
+
+    # Establish tunnel (server only)
+    if ( $body !~ m/^([-a-zA-Z0-9]+) (\S+@\S+) ([\d\s:]+)$/ ) {
+        print "Message syntax error.\n";
+        return;
+    }
+    my $ident = $1;
+    my $userhost = $2;
+    my @ports = split ' ', $3;
+    my %permitted = ();
+    $permitted{$_} = 1 foreach @$permissions;
+    foreach ( @ports ) {
+        unless ( m/^(?:(\d*)\:)?(\d+)$/ &&
+                 $2 && $2 < 65536 && exists($permitted{$2}) &&
+                 (!$1 || ( $1 >= 1024 && $1 < 65536) ) ) {
+            print "Port error: Invalid format or permission denied.\n";
+            return;
+        }
+        $_ = '-R'.($1||$2).':localhost:'.$2;
+    }
+    launch_ssh($from, $ident, $userhost, @ports);
+}
+
+# Conver a glob with ? or * to an equivalent regular expression and see if it
+# matches a given string.
+sub globmatch {
+    my ($glob, $text) = @_;
+    $glob =~ s/([^A-Za-z_0-9])/$1 eq '*' ? '.*' : $1 eq '?' ? '.' : "\\$1"/ige;
+    return $text =~ m/^$glob$/i;
+}
