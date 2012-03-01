@@ -2,6 +2,7 @@
 #
 # distclientwx.pl - wxWidgets GUI for ga-spectroscopy distributor client.
 #
+
 use threads;
 use threads::shared;
 use FindBin;
@@ -18,6 +19,7 @@ sub OnInit {
     Wx::InitAllImageHandlers();
     my $frame = MyFrame->new();
     $frame->Show(1);
+    $frame->Show(0) if $frame->IsIconized();
     $main::FRAME = $frame;
     return 1;
 }
@@ -141,9 +143,11 @@ MESSAGE:
             $status = pop @main::events;
         }
         my $thread = $status->{thread} || 0;
+        my $mode = $status->{mode} || '';
 
-        if ( ($status->{mode}||'') eq 'STOPPING' )
-            { $self->Close(1); return }
+        if ( $mode eq 'STOPPING' ) { $self->Close(1); return }
+        elsif ( $mode eq 'SHOWWINDOW' ) { $self->OnToggleWindow(1); return }
+        elsif ( $mode eq 'HIDEWINDOW' ) { $self->OnToggleWindow(0); return }
         my $str = main::RenderStatus($status);
 
         my ($label, $progress) = @{$threads->[$thread]};
@@ -181,7 +185,9 @@ sub OnExit {
 
 sub OnToggleWindow {
     my ($self, $arg) = @_;
-    $self->Show(defined($arg) ? $arg : !$self->IsShown());
+    my $show = defined($arg) ? $arg : !$self->IsShown();
+    $self->Show($show);
+    $self->Iconize(0) if $show;
 }
 
 sub OnClose {
@@ -236,13 +242,16 @@ sub OnRightClick {
 
 package main;
 
+my $ERRHEAD = 'An error occurred while starting up.';
+
 our $NAME = 'Distributed Computing Client';
 our $ICONFILE = $FindBin::Bin . (#($^O eq 'MSWin32') ? '/distclient.exe;1' :
                                  '/box.ico');
 
 our $THREADCOUNT; # FIXME
 if ( ! do 'distclient.pl' ) {
-    Wx::MessageBox("An error occurred while starting up.\nPlease reinstall the application.\n\n$@\n$!", $main::NAME, wxOK|wxICON_ERROR);
+    Wx::MessageBox("$ERRHEAD\nPlease reinstall the application.\n\n$@\n$!",
+                   $main::NAME, wxOK|wxICON_ERROR);
     exit 0;
     # Avoid only-used-once warning (never run)
     our ($SERVERNAME,$SERVERDETAIL) = ('','');
@@ -253,7 +262,8 @@ our $THREAD_EVENT : shared = Wx::NewEventType;
 my $app = MyApp->new;
 
 our @events :shared = ();
-our $statusposter = sub {
+our %callbacks;
+$callbacks{poststatus} = sub {
     my ($result) = @_;
     { lock(@events); push @events, $result }
     # # WxPlThreadEvent sometimes crashes.

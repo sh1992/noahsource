@@ -2,9 +2,10 @@
 #
 # distclient.pl - Distributed Computing Client
 #
-use Config;
-# Support unthreaded Perl via the forks module.
-BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
+
+## Support unthreaded Perl via the forks module. WARNING: Very slow.
+#use Config;
+#BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
 use threads;
 use threads::shared;
 use FindBin;
@@ -27,23 +28,29 @@ use strict;
 my $HAVE_Win32_API = 0;
 eval 'use Win32::API; $HAVE_Win32_API = 1';
 
-our $VERSION = 20120210;
+our $VERSION = 20120301;
 my $USERAGENT = "distclient.pl/$VERSION";
+my $IPC_PORT = 29482;
 
 # Load server configuration
 our ($HOST, $PORT);
-our ($SERVERNAME,$SERVERDETAIL) = ('Thesis@home','Thesis-related computations for noah.anderson@ncf.edu.'); # TODO: From a configuration file
+our ($SERVERNAME,$SERVERDETAIL);
 my $serverconffn = File::Spec->catfile($FindBin::Bin, 'server.conf');
 if ( open F, '<', $serverconffn ) {
     my $buf = <F>;
     my $obj = eval { from_json($buf) } || {};
     if ( exists($obj->{host}) ) { $HOST = $obj->{host} }
     if ( exists($obj->{port}) ) { $PORT = $obj->{port} }
+    if ( exists($obj->{servername}) ) { $SERVERNAME = $obj->{servername} }
+    if ( exists($obj->{serverdetail}) )
+        { $SERVERDETAIL = $obj->{serverdetail} }
     close F;
 }
 if ( !$HOST || !$PORT ) {
     die "Could not load server configuration";
 }
+$SERVERNAME ||= 'Skynet';
+$SERVERDETAIL ||= 'Taking over the world, please wait.';
 
 # Detect system information (number of processors)
 my $processorcount = 0;
@@ -62,7 +69,7 @@ if ( $^O eq 'MSWin32' ) {
     # void GetSystemInfo(LPSYSTEM_INFO lpSystemInfo);
     my $function = ( Win32::API->new('kernel32','GetNativeSystemInfo','P','V')
                      || Win32::API->new('kernel32','GetSystemInfo','P','V') )
-        or die "Can't find GetNativeSystemInfo or GetSystemInfo";
+        or die "Can't import GetNativeSystemInfo or GetSystemInfo: $!";
     # Will this even work on 64-bit Perl?
     my $systemInfo = pack('L9',0,0,0,0,0,0,0,0,0);
     $function->Call($systemInfo);
@@ -79,7 +86,7 @@ if ( $^O eq 'MSWin32' ) {
     # While clonable, this is good enough for current purposes.
     # UINT GetSystemDirectory(LPTSTR lpBuffer, UINT uSize);
     $function = Win32::API->new('kernel32','GetSystemDirectory', 'PN','N')
-        or die "Can't access GetSystemDirectory";
+        or die "Can't import GetSystemDirectory: $!";
     my $windir = ' 'x1024;
     my $rc = $function->Call($windir, 1023);
     die "GetSystemDirectory failed: $rc" if $rc < 1 || $rc > 1022;
@@ -93,7 +100,7 @@ if ( $^O eq 'MSWin32' ) {
     # DWORD nFileSystemNameSize);
     $function = Win32::API->new('kernel32','GetVolumeInformation',
                                 'PPNPPPPN','N')
-        or die "Can't access GetVolumeInformation";
+        or die "Can't import GetVolumeInformation: $!";
     my $volumeSerialNumber = pack 'I', 0;
     $function->Call($windir, 0, 0, $volumeSerialNumber, 0, 0, 0, 0)
         or die "Can't retrieve volume information\n";
@@ -196,11 +203,15 @@ my $appversion :shared = 0;     # App "version" (threads reload on change)
 
 our $clientthread = undef;      # Socket communication thread
 our @workthreads;               # Worker threads
-our $statusposter;              # Front-end's status callback function
+our %callbacks = (              # Callback functions
+    poststatus => undef,        # Post status message to main thread
+);
+my $startup_complete :shared = 0;
+my $exiting :shared = 0;
 
 if ( !caller ) {
     print "PID: $$\n";
-    $statusposter = sub {
+    $callbacks{poststatus} = sub {
         my ($result) = @_;
         print to_json($result),"\n";
     };
@@ -212,10 +223,21 @@ if ( !caller ) {
 
 # Start the client worker threads and main socket thread
 sub StartClient {
+    die "Status callback is not defined." unless $callbacks{poststatus};
     for ( my $i = 1; $i <= $THREADCOUNT; $i++ ) {
         push @workthreads, threads->create(\&WorkThread, $i);
     }
+    $startup_complete = 0;
     $clientthread = threads->create(\&SocketThread);
+    { # Wait for startup
+        lock($startup_complete);
+        cond_wait($startup_complete) until $startup_complete != 0;
+    }
+    if ( $startup_complete < 0 ) {
+        PostRawStatus({thread => 0, mode => 'ERROR',
+                       error => "Failed to start client thread."});
+        $exiting = 1;
+    }
 }
 
 # Called by a thread to send a status message to the front-end
@@ -227,9 +249,12 @@ sub PostStatus {
     while ( defined( my $k = shift(@_) ) && defined( my $v = shift(@_) ) ) {
         $status{$id}{$k} = $v
     }
-    if ( $statusposter ) {
-        $statusposter->($status{$id});
-    }
+    $callbacks{poststatus}->($status{$id});
+}
+
+sub PostRawStatus {
+    my ($status) = @_;
+    $callbacks{poststatus}->(shared_clone($status));
 }
 
 # Called by front-end to convert a status message into a
@@ -261,7 +286,6 @@ sub RenderStatus {
     return $str;
 }
 
-my $exiting :shared = 0;
 # Called by front-end to trigger a shut down the client
 sub DoExit {
     my @threads = ($clientthread, @workthreads);
@@ -271,17 +295,27 @@ sub DoExit {
 
 # Called by front-end when the program is about to exit
 sub OnExit {
-    DoExit() unless $exiting;
+    return 0 if $exiting >= 2;
+    DoExit() if $exiting < 1;
     my @threads = ($clientthread, @workthreads);
+    my @joined = ();
     my $i = 0; my $wait = 1;
+    $exiting = 2;
     while ( $i < 20 && $wait ) {
         $wait = 0;
-        foreach ( @threads ) {
-            unless ( $_->is_joinable() ) {
+        for ( my $j = 0; $j < @threads; ) {
+            ($j++,next) if $joined[$j];
+            if ( $threads[$j]->is_joinable() ) {
+                print "JOIN\n";
+                $threads[$j]->join();
+                $joined[$j]++;
+            }
+            else {
                 # Nudge any threads stuck in "Idle" mode.
                 { lock(@pendingwork); cond_broadcast(@pendingwork) }
                 threads->yield();
                 $wait++;
+                $j++;
             }
         }
         if ( $wait ) {
@@ -291,11 +325,32 @@ sub OnExit {
         else { print "No wait\n" }
         $i++;
     }
-    foreach ( @threads ) { # print "DETACH\n"; $_->detach() }
-        if ( $_->is_joinable() ) { print "JOIN\n";$_->join() }
-        #else { print "DETACH\n";$_->detach() }
-    }
     chdir $FindBin::Bin; # To allow tempdir cleanup to take place
+    return 1;
+}
+
+sub handle_ipc {
+    my ($select, $ipc) = (shift(@_), shift(@_));
+    foreach my $s ( @_ ) {
+        if ( $s eq $ipc ) {         # IPC server
+            print "Got IPC client\n";
+            my $ipcclient = $s->accept();
+            $select->add($ipcclient);
+            next;
+        }
+        else {                      # IPC client
+            my $buf = '';
+            my $rc = sysread($s, $buf, 1);
+            if ( !$rc or $rc < 1 ) { $select->remove($s); close($s); next }
+            $buf = uc $buf;
+            my %rpccommands = (Q => 'STOPPING', S => 'SHOWWINDOW',
+                               H => 'HIDEWINDOW');
+            if ( exists($rpccommands{$buf}) ) {
+                PostRawStatus({thread => 0, mode => $rpccommands{$buf}});
+            }
+            next;
+        }
+    }
 }
 
 # Thread to handle socket communication with the server
@@ -316,13 +371,26 @@ sub SocketThread {
     };
     local $SIG{PIPE} = 'IGNORE';
     local $SIG{INT} = 'IGNORE';
+
+    # Create IPC Message Socket
+    my $ipc = IO::Socket::INET->new(Listen => 1, Reuse => 1,
+                                    LocalAddr => '127.0.0.1',
+                                    LocalPort => $IPC_PORT);
+    warn "Failed to create message socket: $!" unless $ipc;
+    $startup_complete = $ipc ? 1 : -1;
+    { lock($startup_complete); cond_broadcast($startup_complete) }
+    (sleep 5,die) if $startup_complete < 0;
+
     my $wait = 3;
+    my $select = IO::Select->new($ipc);
     while ( 1 ) {
+        handle_ipc($select, $ipc, $select->can_read(0));
         PostStatus(undef, mode => 'CONNECTING');
         $sock = IO::Socket::INET->new(PeerAddr => $HOST, PeerPort => $PORT);
         if ( !$sock ) {
             my $error = $!;
             for ( my $i = $wait; $i > 0; $i-- ) {
+                handle_ipc($select, $ipc, $select->can_read(0));
                 PostStatus(undef, mode => 'DISCONNECTED', error => $error,
                                   progress => $i);
                 sleep 1;
@@ -330,19 +398,19 @@ sub SocketThread {
             $wait = int($wait*1.4); # Back off before retrying?
             next;
         }
-        $wait = 3;
+        # Connection was successful
+        $select->add($sock);
+        $wait = 3;              # Reset timeout
         { my $oldfh = select($sock); $| = 1; select($oldfh) }
-        my $select = IO::Select->new($sock);
         PostStatus(undef, mode => 'WAITING');
         my $sockbuf = '';
         my $lastseen = 0;
     SOCKLOOP:
         while ( 1 ) {
-            while ( $select->can_read(.25) ) {
+            foreach my $s ( $select->can_read(.25) ) {
+                if ( $s ne $sock ) { handle_ipc($select, $ipc, $s); next }
                 my $bytes = sysread($sock, $sockbuf, 512, length($sockbuf));
                 if ( !$bytes ) {
-                    close($sock);
-                    $sock = undef;
                     PostStatus(undef, mode => 'DISCONNECTED',
                                error => defined($bytes) ? 'Retrying' : $!);
                     last SOCKLOOP;
@@ -377,9 +445,11 @@ sub SocketThread {
                         print $sock "PONG\n";
                     }
                     elsif ( $l =~ m/^PONG/ ) { }
-                    elsif ( $l =~ m/^GOAWAY\s*(.*)/ ) {
-                        PostStatus(undef, mode => 'ERROR', error => $1 ||
+                    elsif ( $l =~ m/^(GOAWAY|QUIT)\s*(.*)/ ) {
+                        PostStatus(undef, mode => 'ERROR', error => $2 ||
                                    'Rejected by server, no reason given.');
+                        PostRawStatus({thread => 0, mode => 'STOPPING'})
+                            if uc $1 eq 'QUIT';
                     }
                     #print "$l\n"; # FIXME
                 }
@@ -399,15 +469,17 @@ sub SocketThread {
             $lastseen++;
             if ( $lastseen == 2400 ) { print $sock "PING\n" }
             elsif ( $lastseen >= 2500 ) {
-                close($sock);
-                $sock = undef;
                 PostStatus(undef, mode => 'DISCONNECTED',
                            error => 'Timed out waiting for a ping reply.');
                 last SOCKLOOP;
             }
             # FIXME: Trap unexpected errors from threads
         }
-        # Disconnected. Reconnect now.
+        # Disconnected.
+        $select->remove($sock);
+        close($sock);
+        $sock = undef;
+        # Try to reconnect.
         sleep 1;
     }
 }
@@ -611,7 +683,8 @@ sub CheckApplication {
 sub LocalLoadApplication {
     my ($id, $app) = @_;
     WorkFail($id, "No app loaded") if $appversion == -1;
-    return if defined($app->{appversion}) and $appversion == $app->{appversion};
+    return
+        if defined($app->{appversion}) and $appversion == $app->{appversion};
     print "Loading app version $appversion\n";
     my $appobj = do 'app.pl'
         or WorkFail($id, "Application code could not be loaded: $@ $!");
@@ -639,7 +712,8 @@ sub UnpackApplication {
     $tar->read($fn) or die "Can't open $fn: $!";
     foreach my $f ( $tar->list_files() ) {
         my @components = split /[\\\/]+/, $f;
-        shift @components while @components and ($components[0] eq '.' or $components[0] eq '');
+        shift @components while @components and ($components[0] eq '.' or
+                                                 $components[0] eq '');
         next unless @components;
         my $filearch = $components[0];
         $components[0] = '.';
@@ -654,7 +728,8 @@ sub UnpackApplication {
             }
         }
         # Extract the file
-        $tar->extract_file($f, join('/', @components)) or die "Could not extract $f from app: $!";
+        $tar->extract_file($f, join('/', @components))
+            or die "Could not extract $f from app: $!";
     }
 }
 

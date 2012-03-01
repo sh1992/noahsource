@@ -162,6 +162,7 @@ sub handle_sockets {
                 close($obj->{writeto})
             }
             elsif ( $obj->{type} eq 'watchdog' and $obj->{ident} ) {
+                print "Lost watchdog $obj->{ident} at ",scalar localtime,"\n";
                 $erequests--;
                 $requests{$obj->{ident}}{watchdog} = undef;
             }

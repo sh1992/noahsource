@@ -65,7 +65,8 @@ sub Work {
                                           'ga-spectroscopy-client');
         my $cmd = "$program \"$infn\" \"$outfn\"";
         $cmd = "nice -n19 $cmd" if $^O ne 'MSWin32';
-        $pid = open SPEC, '-|', $cmd or WorkFail($id, 'Cannot start gaspec client');
+        $pid = open SPEC, '-|', $cmd
+            or WorkFail($id, 'Cannot start gaspec client');
         # Nice the process on MSWin32. Note that it would be better to do this
         # in CreateProcess...
         if ( $HAVE_Win32_Process ) {
@@ -87,7 +88,6 @@ sub Work {
         #print "$id gaspec done\n";
         $rc = close SPEC;
         unlink $infn; # Remove our temporary input file
-        #if ( $quit ) { close SPEC; print "Worker exiting (2)\n"; threads->exit }
     }
 
     # Process finished

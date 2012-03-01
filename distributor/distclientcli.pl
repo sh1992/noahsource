@@ -2,9 +2,10 @@
 #
 # distclientcli.pl - Console interface for ga-spectroscopy distributor client.
 #
-use Config;
-# Support unthreaded Perl via the forks module.
-BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
+
+## Support unthreaded Perl via the forks module. WARNING: Very slow.
+#use Config;
+#BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
 use threads;
 use threads::shared;
 use FindBin;
@@ -16,7 +17,7 @@ if ( !eval('use Win32::Console::ANSI; 1') and $^O eq 'MSWin32' ) {
     die "On Win32, Win32::Console::ANSI is required\n";
 }
 
-sub catch_zap { print "Exiting\n"; OnExit(); exit(1) }
+sub catch_zap { print "Exiting\n"; OnExit() and exit(1) }
 $SIG{INT} = \&catch_zap;
 
 our $THREADCOUNT;
@@ -32,7 +33,8 @@ for ( my $i = 0; $i <= $THREADCOUNT; $i++ ) {
 }
 my @events :shared = ();
 
-our $statusposter = sub {
+our %callbacks;
+$callbacks{poststatus} = sub {
     my ($result) = @_;
     lock(@events);
     push @events, $result;
@@ -43,9 +45,11 @@ StartClient();
 while ( 1 ) {
     my $status = undef;
     { # Wait for work
+        # If we accept the signal here, @events will still be locked.
+        my $got_zap = 0; local $SIG{INT} = sub { $got_zap++ };
         lock(@events);
-        cond_timedwait(@events, time()+2) until @events;
-        $status = shift @events;
+        cond_timedwait(@events, time()+2) until @events or $got_zap;
+        $status = shift @events unless $got_zap;
     }
     last unless $status;
     my $thread = $status->{thread} || 0;
@@ -62,6 +66,7 @@ while ( 1 ) {
         }
         #print join("\n",@lastmsg);
     }
+    elsif ( $mode eq 'STOPPING' ) { last }
 
     my $newstr = "[$thread] ".RenderStatus($status);
     if ( $thread && $status->{progress} ) {
@@ -75,6 +80,7 @@ while ( 1 ) {
     ansi_down($linedelta);
 }
 
+print "Finished\n";
 OnExit();
 exit 0;
 

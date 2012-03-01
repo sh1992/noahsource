@@ -1,4 +1,8 @@
-@path c:\mingw\bin;c:\mingw\msys\1.0\bin;%path%
-windres distclient.rc -O coff -o distclient.res
-gcc -o distclient.exe -mwindows wrapper.c distclient.res
-strip distclient.exe
+@echo off
+rem
+rem make.bat - Compile distclient wrapper using MinGW
+rem
+
+path c:\mingw\bin;c:\mingw\msys\1.0\bin;%path%
+
+mingw32-make distclient.exe CC=gcc
