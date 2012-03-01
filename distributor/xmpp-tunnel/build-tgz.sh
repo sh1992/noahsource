@@ -6,7 +6,7 @@
 ARCHIVE=xmpp-tunnel.tar
 FLAGS="--show-stored-names --owner=0 --group=0"
 rm -f "$ARCHIVE" "$ARCHIVE".gz
-tar --transform 's|^|xmpp-tunnel/|' $FLAGS \
+tar --transform 's|^|xmpp-tunnel/|S' $FLAGS \
     -cvf "$ARCHIVE" xmpp-tunnel xmpp-tunnel-watchdog xmpp-tunnel-wait \
                     client.conf id_rsa.pub
 gzip -9 "$ARCHIVE"

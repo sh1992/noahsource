@@ -7,11 +7,11 @@
 ARCHIVE=distclient.tar
 FLAGS="--show-stored-names --owner=0 --group=0"
 rm -f "$ARCHIVE" "$ARCHIVE".gz
-tar --transform 's|^|distclient/|' $FLAGS \
+tar --transform 's|^|distclient/|S' $FLAGS \
     -cvf "$ARCHIVE" distclient.pl distclientcli.pl server.conf
 LIBDIR=`perl -le 'for(@INC,"./lib"){print if -f "\$_/HTTP/Async.pm"}'`
 [ -z "$LIBDIR" ] && echo Can not find HTTP::Async && exit 1
-tar --transform "s|^$LIBDIR|distclient/lib|" $FLAGS \
+tar --transform "s|^$LIBDIR|distclient/lib|S" $FLAGS \
     --append -vf "$ARCHIVE" $LIBDIR/HTTP/Async{.pm,}
 gzip -9 "$ARCHIVE"
 echo Created "$ARCHIVE".gz
