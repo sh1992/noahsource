@@ -1,6 +1,7 @@
 #!/usr/bin/perl -T
 #
 # xmpp-tunnel-watchdog - Monitor tunnel connection status.
+# xmpp-tunnel-wait - Wait for a tunnel connection to be established.
 #
 # This is designed to be run as a forced SSH command. It will output a ping
 # every $interval seconds and exit if it receives nothing for $timeout seconds.
@@ -12,12 +13,14 @@ use IO::Socket::UNIX;
 use warnings;
 use strict;
 
-die "You shouldn't run this as root.\n" unless $>;
+my $wait = $0 =~ m/wait/ ? 1 : 0;
+
+die "You shouldn't run this as root.\n" if !$wait && $> == 0;
 $ENV{PATH} = '/usr/local/bin:/usr/bin:/bin';
 
 # Load the configuration file
 my $conf = shift(@ARGV);
-die "Usage: xmpp-tunnel-watchdog <conf>\n" unless $conf;
+die "Usage: $0 <conf>\n" unless $conf;
 open F, '<', $conf or die;
 my %options = ();
 while (<F>) {
@@ -29,21 +32,28 @@ close F;
 $_ = '';
 
 die "Configuration is incomplete.\n"
-    unless $options{interval} and $options{interval} > 1 and
+    unless (!$wait or ($options{interval} and $options{interval} > 1)) and
            $options{watchdogsocket};
 my $interval = $options{interval};
 my $timeout = $interval*5;
+
+# Connect to the watchdog message socket
+my $sock = IO::Socket::UNIX->new(Peer => $options{watchdogsocket})
+    or quit("Can't open watchdog socket: $!");
+
+if ( $wait ) {
+    print $sock "WAIT\n";
+    my $rc = <$sock>;
+    exit($rc =~ m/OK/ ? 0 : 1);
+}
 
 # Receive or generate session identifier
 my $sessionid = $ENV{SSH_ORIGINAL_COMMAND} || $$;
 $sessionid =~ m/ID=([a-zA-Z0-9]+)/i;
 $sessionid = $1||$$;
-
-# Connect to the watchdog message socket
-my $sock = IO::Socket::UNIX->new(Peer => $options{watchdogsocket})
-    or quit("Can't open watchdog socket: $!");
 print $sock "HELLO $sessionid\n";
 
+# Set up select
 my ($lastsend,$lastreceive) = (time, time);
 my $select = IO::Select->new(*STDIN, $sock);
 my $buf = '';
@@ -60,10 +70,10 @@ while ( 1 ) {
     }
     quit("Timed out after $timeout seconds.") if $now > $lastreceive+$timeout;
 }
-quit();
 
 sub quit {
     print STDERR @_,"\n";
+    exit(1) if $wait;
     # If we were started by SSH, try to kill our SSHd
     my $ppid = 0;
     if ( open F, '<', "/proc/$$/stat" ) {
@@ -92,5 +102,5 @@ sub quit {
 
 sub zap {
     close $sock if $sock;
-    exit 0;
+    exit 1;
 }

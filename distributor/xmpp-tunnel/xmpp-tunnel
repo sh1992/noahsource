@@ -126,9 +126,9 @@ while ( 1 ) {
     # Handle messages
     print "Connected.\n";
     handle_sockets(0);
-    while ( defined($X->Process(1)) ) {
-        #last MAIN if $done && (time > $done);
-        handle_sockets(0);
+    while ( 1 ) {
+        last unless defined($X->Process(0));
+        handle_sockets(1);
         handle_requests() if $isclient;
     }
 }
@@ -178,15 +178,25 @@ sub handle_sockets {
                 my $l = $1;
                 print $l, "\n";
                 if ( $obj->{type} eq 'watchdog' ) {
-                    if ( $l =~ m/^hello\s+(.+)$/i ) {
+                    if ( $l =~ m/^HELLO\s+(.+)$/i ) {
                         my $ident = $1;
                         next unless exists($requests{$ident});
                         print "Got watchdog for $ident\n";
-                        $erequests++ unless $obj->{ident};
+                        unless ( $obj->{ident} ) {
+                            $erequests++;
+                            foreach my $waiter ( values %socks ) {
+                                next unless $waiter->{type} eq 'waiter';
+                                print { $waiter->{sock} } "OK\n";
+                            }
+                        }
                         $obj->{ident} = $ident;
                         $requests{$ident}{lastattempt} = 0;
                         $requests{$ident}{nattempts} = 0;
                         $requests{$ident}{watchdog} = scalar($obj->{sock});
+                    }
+                    elsif ( $l =~ m/^WAIT/i ) {
+                        $obj->{type} = 'waiter';
+                        print { $obj->{sock} } "OK\n" if $erequests;
                     }
                 }
             }
@@ -240,9 +250,10 @@ sub launch_ssh {
     my $port = 22;
     $port = $2+0 if $host =~ s/(\]|^[^:]+):(\d+)$/$1/;
     $host =~ s/\[(.+)\]/$1/; # Wrap IPv6 address in [] if you specify a port.
-    my @command = ('ssh', '-oStrictHostKeyChecking=no', '-i',
-                   $options{sshidentity}, '-oUserKnownHostsFile=/dev/null',
-                   '-p', $port, @forwards, $host, '/bin/false', 'ID='.$ident);
+    my @command = ('ssh', '-oStrictHostKeyChecking=no', '-oBatchMode=yes',
+                   '-oUserKnownHostsFile=/dev/null', '-i',
+                   $options{sshidentity}, '-p', $port, @forwards,
+                   $host, '/bin/false', 'ID='.$ident);
     print 'Running ',join(' ',@command),"\n";
     local %ENV = ( PATH => '/usr/local/bin:/usr/bin:/bin' );
     my $pid = open2(my $out, my $in, @command);

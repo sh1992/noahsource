@@ -2,6 +2,9 @@
 #
 # distclient.pl - Distributed Computing Client
 #
+use Config;
+# Support unthreaded Perl via the forks module. (Not tested with Wx.)
+BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
 use threads;
 use threads::shared;
 use FindBin;
@@ -108,8 +111,9 @@ elsif ( -r '/proc/cpuinfo' ) {
 }
 # On BSD, fall back to sysctl -n hw.ncpu to determine number of processors.
 if ( !$processorcount ) {
-    my $sysctl = -x '/sbin/sysctl' ? '/sbin/sysctl' :
-           ( -x '/usr/bin/sysctl' ? '/usr/bin/sysctl' : '');
+    my @path = (split(/:/, "$ENV{PATH}"), qw|/usr/local/bin /usr/bin /bin|,
+                qw|/usr/local/sbin /usr/sbin /sbin|);
+    my ($sysctl) = grep { -x ($_ .= '/sysctl') } @path;
     if ( $sysctl and (open SYSCTL, '-|', $sysctl, '-n', 'hw.ncpu') ) {
         my $str = <SYSCTL>;
         if ( close(SYSCTL) and ($str||'') =~ m/^(\d+)/ and $1+0 > 0 )
@@ -128,22 +132,26 @@ if ( !$sysident && -f $sysidfile && open F, '<', $sysidfile ) {
     close F;
 }
 
-if ( $^O eq 'linux' || $^O =~ m/bsd$/ ) {
-    # In case of BSD, assume Linux emulation. FIXME: Test on FreeBSD.
+if ( $^O eq 'linux' ) {
     my $uname = `uname -m`;
     $uname =~ s/\s//g;
     $uname = 'x86' if $uname =~ m/^i[0-9]86$/;
-    $uname = 'x86_64' if $uname =~ m/amd64|86[_-]64/;
+    $uname = 'x86_64' if $uname =~ m/(amd|86[_-])64/;
     $platform = "linux-$uname" if $uname;
+}
+elsif ( $^O =~ m/bsd$/ ) {
+    # In case of BSD, assume Linux emulation.
+    # Note that FreeBSD's Linux emulation only supports x86 (32-bit) programs.
+    $platform = "linux-x86";
 }
 $platform ||= 'all';
 
 # Use defaults on other systems. Consider using Sys::Info instead.
 my $hostname = hostname;
-
-print "$hostname has $processorcount processors\n";
 $sysident = $sysident ? join(' ', $hostname, $sysident) : $hostname;
 my $myident = Digest::MD5::md5_hex($sysident);
+
+print "$hostname has $processorcount processors\n";
 print "$hostname has identifier $myident\n  (based on $sysident)\n";
 
 our $THREADCOUNT = $processorcount;
@@ -307,6 +315,7 @@ sub SocketThread {
         threads->exit();
     };
     local $SIG{PIPE} = 'IGNORE';
+    local $SIG{INT} = 'IGNORE';
     my $wait = 3;
     while ( 1 ) {
         PostStatus(undef, mode => 'CONNECTING');
@@ -412,6 +421,7 @@ sub WorkThread {
         threads->exit();
     };
     local $SIG{PIPE} = 'IGNORE';
+    local $SIG{INT} = 'IGNORE';
     my %app = ();
     while ( 1 ) {
         { # Wait for work
