@@ -3,7 +3,7 @@
 # distclient.pl - Distributed Computing Client
 #
 use Config;
-# Support unthreaded Perl via the forks module. (Not tested with Wx.)
+# Support unthreaded Perl via the forks module.
 BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
 use threads;
 use threads::shared;
