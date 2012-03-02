@@ -21,7 +21,7 @@ use strict;
 # Load the configuration file
 my $conf = shift(@ARGV);
 die "Usage: xmpp-tunnel <conf>\n" unless $conf;
-open F, '<', $conf or die;
+open F, '<', $conf or die "Can't open $conf: $!";
 my %options = ( permit => {}, request => {}, sshport => 22,
                 resource => sprintf("%08x", int(rand()*0x7fffffff)),
               );
@@ -142,6 +142,9 @@ continue {
 
 sub handle_sockets {
     my ($time) = @_;
+    # If we don't have any handles registered, select will return immediately.
+    if ( $select->count() <= 0 )
+        { select(undef, undef, undef, $time); $time = 0 }
     # Handle ready sockets
     foreach my $s ( $select->can_read($time) ) {
         # Accept new watchdog connections
