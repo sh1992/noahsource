@@ -125,10 +125,11 @@ while ( 1 ) {
     # Handle messages
     print "Connected.\n";
     handle_sockets(0);
-    while ( 1 ) {
-        last unless defined($X->Process(0));
+    my $i = 0;
+    while ( defined($status = $X->Process(0)) ) {
         handle_sockets(1);
         handle_requests() if $isclient;
+        print scalar localtime, "\n" if ($i++ % 600) == 0;
     }
 }
 continue {
