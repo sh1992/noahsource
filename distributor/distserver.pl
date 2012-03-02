@@ -222,7 +222,7 @@ while ( 1 ) {
                         $workers{$ident} =
                             { sock => $id, id => $ident, name => $name,
                               threads => 0, assigned => 0, seen => time,
-                              seenwork => 0, jailed => 0 };
+                              seenwork => 0, jailed => 0, ver => $sockver };
                         if ( $sockver < $MINCLIENT ) {
                             print $sock "GOAWAY Distributed Computing Client upgrade required.\n";
                             print "Client $name has version $sockver; too old!\n";
@@ -335,7 +335,7 @@ sub DumpWorkers {
     foreach my $id ( keys %workers ) {
         next unless exists($workers{$id}{name}) and defined($workers{$id}{name});
         next unless exists($workers{$id}{sock}) and defined($workers{$id}{sock});
-        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{seenwork}\t$workers{$id}{threads}\n";
+        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{seenwork}\t$workers{$id}{threads}\t$workers{$id}{ver}\n";
         if ( $workers{$id}{seen}+300 < $now ) {
             my $sock = $clients{$workers{$id}{sock}}{sock};
             print $sock "PING\n";
