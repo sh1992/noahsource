@@ -27,6 +27,27 @@ InstProgressFlags smooth
 XPStyle on
 Page instfiles
 
+; If this installer is run from a network drive on Windows 7, NSISdl might
+; fail to create a socket. So copy ourself to a temporary folder and rerun
+; from there.
+!include FileFunc.nsh
+!insertmacro GetExeName
+!insertmacro GetParameters
+!insertmacro GetOptions
+Function .onInit
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 /NOCOPY $R0
+    IfErrors +1 nocopy
+    ; Copy self
+    InitPluginsDir
+    ${GetExeName} $R0
+    CopyFiles /SILENT "$R0" "$PLUGINSDIR\setup.exe"
+    ExecWait '"$PLUGINSDIR\setup.exe" /NOCOPY'
+    Abort
+nocopy:
+FunctionEnd
+
 ; The stuff to install
 Section "" ;No components page, name is not important
     DetailPrint "Downloading..."
