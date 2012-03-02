@@ -6,7 +6,7 @@ usage() {
     cat <<EOF
 
 Usage: spectrograph.sh [-f <format>|-p|-P] [-t <title>] [-T <title>]
-                       <file>.cat [<match file>.cat]
+                       <file>.cat [...] [<match file>.cat]
 
     -f <format>, --format       Format of output plot. Supported formats are
                                 "png" and "postscript".
@@ -78,78 +78,80 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-# Find .CAT files
-ORIGFN="$1"
-shift
-BASEFN="`convert_filename "$ORIGFN" ''`"
-FN="$BASEFN.cat"
-MATCH="$1"
-shift
-
-if [ -n "$1" -o "$MATCH" = "png" -o "$MATCH" = "postscript" ]; then
-    echo "Warning: Check your command-line syntax"
+# Find .CAT file for match
+if [ $# -gt 1 ]; then
+    for MATCH; do :; done  # for implicitly loops over command-line arguments
+    [ -z "$MATCHTITLE" ] && MATCHTITLE=`basename "$MATCH" .cat`
 fi
-
-OUT="$BASEFN.int"
-if [ -f $OUT ]; then
-    # Regenerate .CAT file
-    $BINDIR/spcat $FN || exit 1
-else
-    echo
-    echo WARNING
-    echo SPCAT .INT/.VAR files missing! Plotting .CAT file anyway...
-    echo
-fi
-# Generate output plot file
-[ -z "$TITLE" ] && TITLE=`basename "$FN" .cat`
-[ -z "$MATCHTITLE" -a -n "$MATCH" ] && MATCHTITLE=`basename "$MATCH" .cat`
 [ -z "$XRANGE" ] && XRANGE=8700:18300
 
-OUT="$BASEFN$EXT"
-FILTER="awk '{print substr(\$0,1,13),substr(\$0,14,8),substr(\$0,22,8)}'"
-echo "$FN" '=>' "$OUT"
-(
-cat <<EOF
-set term $FORMAT
-set output "$OUT"
-set xrange [$XRANGE]
-set lmargin at screen .1
-EOF
-[ -n "$MATCH" ] && cat <<EOF
-set size 1,0.5
-
-set multiplot
-set origin 0.0,0.5
-unset xtics
-set bmargin 0
-EOF
-cat <<EOF
-set yrange [0:*]
-set key top
-plot "< $FILTER $FN" using 1:(10**(\$3)) with impulses title "$TITLE", 0 lt 0 title ""
-EOF
-[ -n "$MATCH" ] && cat <<EOF
-
-set origin 0.0,0.0
-set yrange [*:0]
-set xtics
-set tmargin 0
-set bmargin -1
-set key bottom
-plot "< $FILTER $MATCH" using 1:(-10**(\$3)) with impulses title "$MATCHTITLE", 0 lt 0 title ""
-
-unset multiplot
-EOF
-) | gnuplot # | tee /tmp/bar | gnuplot
-
-
-if [ "$EXT" = ".png" -a -z "$NOFITNESS" ]; then
-    LOGFN=`convert_filename "$ORIGFN" .log.`
-    if [ -f $LOGFN ]; then
-        perl $BINDIR/plotfitness.pl $LOGFN
+while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
+    ORIGFN="$1"
+    shift
+    BASEFN="`convert_filename "$ORIGFN" ''`"    # Strip filename extension
+    # Find/generate .CAT file
+    FN="$BASEFN.cat"
+    if [ -f "$BASEFN.int" -a -f "$BASEFN.var" ]; then
+        # Regenerate .CAT file
+        $BINDIR/spcat $FN || exit 1
     else
         echo
-        echo WARNING: No log file, not creating fitness plot
+        echo WARNING
+        echo SPCAT .INT/.VAR files missing! Plotting .CAT file anyway...
         echo
     fi
-fi
+    # Generate output plot file
+    if [ -n "$TITLE" ]; then MYTITLE="$TITLE"
+    else MYTITLE=`basename "$BASEFN"`; fi
+
+    OUT="$BASEFN$EXT"
+    FILTER="awk '{print substr(\$0,1,13),substr(\$0,14,8),substr(\$0,22,8)}'"
+    echo "$FN" '=>' "$OUT"
+    (
+        cat <<EOF
+        set term $FORMAT
+        set output "$OUT"
+        set xrange [$XRANGE]
+        set lmargin at screen .1
+EOF
+        [ -n "$MATCH" ] && cat <<EOF
+        set size 1,0.5
+
+        set multiplot
+        set origin 0.0,0.5
+        unset xtics
+        set bmargin 0
+EOF
+        cat <<EOF
+        set yrange [0:*]
+        set key top
+        plot "< $FILTER $FN" using 1:(10**(\$3)) with impulses \
+                             title "$MYTITLE", 0 lt 0 title ""
+EOF
+        [ -n "$MATCH" ] && cat <<EOF
+
+        set origin 0.0,0.0
+        set yrange [*:0]
+        set xtics
+        set tmargin 0
+        set bmargin -1
+        set key bottom
+        plot "< $FILTER $MATCH" using 1:(-10**(\$3)) with impulses \
+                                title "$MATCHTITLE", 0 lt 0 title ""
+
+        unset multiplot
+EOF
+    ) | gnuplot # | tee /tmp/bar | gnuplot
+
+
+    if [ "$EXT" = ".png" -a -z "$NOFITNESS" ]; then
+        LOGFN=`convert_filename "$ORIGFN" .log.`
+        if [ -f $LOGFN ]; then
+            $BINDIR/plotfitness.pl $LOGFN
+        else
+            echo
+            echo WARNING: No log file, not creating fitness plot
+            echo
+        fi
+    fi
+done
