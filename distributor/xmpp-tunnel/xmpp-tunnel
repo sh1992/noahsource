@@ -14,7 +14,6 @@ use IO::Select;
 use IPC::Open2;
 use Net::XMPP;
 use Digest::MD5 qw/md5_hex/;
-use LWP::Simple;
 use warnings;
 use strict;
 
@@ -356,4 +355,42 @@ sub globmatch {
     my ($glob, $text) = @_;
     $glob =~ s/([^A-Za-z_0-9])/$1 eq '*' ? '.*' : $1 eq '?' ? '.' : "\\$1"/ige;
     return $text =~ m/^$glob$/i;
+}
+
+# Simple HTTP client implementation, avoiding dependency on LWP.
+sub get {
+    my ($url) = @_;
+    # Parse the URL
+    if ( $url !~ m&^http://(?:\[([^\]/]+)\]|([^:/]+))(?:\:(\d+))?(/.*)$&i ) {
+        warn "Can't parse URL $url";
+        return undef;
+    }
+    my ($host, $port, $path) = ($1||$2, $3||80, $4);
+    # Open a socket
+    my $sock = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $port);
+    unless ( $sock ) {
+        warn "Can't connect to $host: $!";
+        return undef;
+    }
+    binmode($sock);
+    # Send a request
+    print $sock "GET $path HTTP/1.0\r\nHost: $host\r\n";
+    print $sock "User-Agent: xmpp-tunnel\r\n\r\n";
+    # Read the response
+    my ($rc, $buf) = (1, '');
+    while ( $rc = sysread($sock, $buf, 1024, length($buf)) ) { }
+    close($sock);
+    if ( !defined($rc) ) {
+        warn "Read failed on $url: $!";
+        return undef;
+    }
+    # Parse the headers
+    $buf =~ s/^([\s\S]+?)\r?\n\r?\n//;
+    my $headers = $1;
+    if ( $headers !~ m/^(HTTP\S*\s+2[^\r\n]*)/i ) { # Note: no redirect support
+        warn "Didn't get HTTP success for $url: $1";
+        return undef;
+    }
+    # Return the body
+    return $buf;
 }
