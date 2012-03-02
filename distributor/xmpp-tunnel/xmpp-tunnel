@@ -158,6 +158,7 @@ sub handle_sockets {
         if ( !$rc ) {
             delete($socks{$obj->{sock}});
             if ( $obj->{type} eq 'ssh' ) {
+                print "Lost SSH connection $obj->{ident} at ",scalar localtime,"\n";
                 delete($tunnels{$obj->{user}});
                 close($obj->{writeto})
             }
@@ -202,8 +203,6 @@ sub handle_sockets {
                 }
             }
         }
-        # Final cleanup
-        delete $socks{$s} unless $rc;
     }
     # Send keepalives and check timeouts on our open tunnels.
     my $now = time;
