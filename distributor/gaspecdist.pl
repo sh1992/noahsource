@@ -41,6 +41,7 @@ my $UPLOADURL = 'data:';
 # Name of data and temporary directories on workers
 my ($REMOTEDATADIR,$REMOTETEMPDIR) = ('data','temp');
 my $WUDURATION = 10;
+my $WORKERSPEED_AVERAGES = 10;
 
 # Load key for distserver. It is currently randomly generated each time the
 # distserver starts up.
@@ -242,9 +243,10 @@ sub WorkReturned {
         my $n = $wu->{nitems}/($receivedtime-$wu->{sent}); # items/second
         $n = 1/60 if $n < 1/60;            # Use at least one item/minute
         # FIXME: max speed?
-        my $ws = $socks{$source}{workerspeed};
         # Average worker speeds to better accommodate EC2 micro instances
-        $ws->{$wu->{worker}} = ($ws->{$wu->{worker}}+$n)/2.0;
+        my $ws = ($socks{$source}{workerspeed}{$wu->{worker}} ||= []);
+        push @$ws, $n;
+        shift @$ws if @$ws > $WORKERSPEED_AVERAGES;
     }
     # Dispatch more work
     delete $workunits{$reply->{id}};
@@ -436,12 +438,11 @@ sub SendWork {
     return if $i < 0; # No work available
     my $client = $items[$i]->{source};
     # Workerspeed varies based on GA run settings
-    my $ws = $socks{$client}{workerspeed};
+    my $ws = ($socks{$client}{workerspeed}{$worker->{id}} ||= []);
     my $duration = $WUDURATION+int(5*rand());
-    $ws->{$worker->{id}} = 10/$duration
-        unless exists($ws->{$worker->{id}}) && $ws->{$worker->{id}};
-    my $n = $ws->{$worker->{id}};
-    $n *= $duration;
+    my $n = 10/$duration*($WORKERSPEED_AVERAGES-@$ws);
+    $n += $_ foreach @$ws;
+    $n *= $duration/$WORKERSPEED_AVERAGES;
 
     # Generate workunit ID
     my $wuid = sprintf("%s-%04d-%04d%s", $DISPATCHID, $socks{$client}{uniqid},
