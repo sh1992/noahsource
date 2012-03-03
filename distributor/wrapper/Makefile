@@ -10,7 +10,7 @@ all: distclient.exe
 
 distclient.exe: LIBS += -lws2_32
 distclient.exe: wrapper.c distclient.res
-	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 	$(STRIP) $@
 
 %.res: %.rc
