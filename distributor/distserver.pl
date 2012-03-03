@@ -251,7 +251,7 @@ while ( 1 ) {
         next unless $workunits{$k}{heartbeat}+$deadline < $now;
         if ( ( $workunits{$k}{queried} >= $workunits{$k}{heartbeat} and
                $workunits{$k}{queried}+$deadline < $now ) or
-              ( $workunits{$k}{pestered} > 3 ) ) {
+              ( $workunits{$k}{pestered} > 1 ) ) { # Twice as slow as expected
             # Cancel workunit
             print "Failing $k [$workunits{$k}{pestered}]\n";
             if ( exists($workers{$workunits{$k}{worker}}) ) {
