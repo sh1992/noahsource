@@ -244,14 +244,13 @@ package main;
 
 my $ERRHEAD = 'An error occurred while starting up.';
 
-our $NAME = 'Distributed Computing Client';
 our $ICONFILE = $FindBin::Bin . (#($^O eq 'MSWin32') ? '/distclient.exe;1' :
                                  '/box.ico');
 
 our $THREADCOUNT; # FIXME
 if ( ! do 'distclient.pl' ) {
     Wx::MessageBox("$ERRHEAD\nPlease reinstall the application.\n\n$@\n$!",
-                   $main::NAME, wxOK|wxICON_ERROR);
+                   $main::NAME||'', wxOK|wxICON_ERROR);
     exit 0;
     # Avoid only-used-once warning (never run)
     our ($SERVERNAME,$SERVERDETAIL) = ('','');

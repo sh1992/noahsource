@@ -437,12 +437,27 @@ sub SendWork {
     my $i = GetNextIndividual(-1, -1);
     return if $i < 0; # No work available
     my $client = $items[$i]->{source};
+
     # Workerspeed varies based on GA run settings
     my $ws = ($socks{$client}{workerspeed}{$worker->{id}} ||= []);
     my $duration = $WUDURATION+int(5*rand());
-    my $n = 10/$duration*($WORKERSPEED_AVERAGES-@$ws);
-    $n += $_ foreach @$ws;
-    $n *= $duration/$WORKERSPEED_AVERAGES;
+    my $n = 0;
+    if ( @$ws >= 4 ) {
+        # Determine the average speed of the worker.
+        my $mean = 0;
+        $mean += $_ foreach @$ws;
+        $mean /= @$ws;
+        my $denom = 0;
+        foreach ( @$ws ) {
+            # Weight excessively slow workunits more, excessively fast
+            # workunits less.
+            my $w = $_ > 2*$mean ? .707**($_/$mean) : ( $_ < .5*$mean ? 2 : 1);
+            $n += $w*$_;
+            $denom += $w;
+        }
+        $n = $n/$denom*$duration;
+    }
+    else { $n = 10 } # Just send 10 workunits until we figure out the speed.
 
     # Generate workunit ID
     my $wuid = sprintf("%s-%04d-%04d%s", $DISPATCHID, $socks{$client}{uniqid},

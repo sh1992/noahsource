@@ -33,6 +33,7 @@ my $USERAGENT = "distclient.pl/$VERSION";
 my $IPC_PORT = 29482;
 
 # Load server configuration
+our $NAME = 'Distributed Computing Client';
 our ($HOST, $PORT);
 our ($SERVERNAME,$SERVERDETAIL);
 my $serverconffn = File::Spec->catfile($FindBin::Bin, 'server.conf');
@@ -158,7 +159,8 @@ my $hostname = hostname;
 $sysident = $sysident ? join(' ', $hostname, $sysident) : $hostname;
 my $myident = Digest::MD5::md5_hex($sysident);
 
-print "$hostname has $processorcount processors\n";
+print "$NAME, version $VERSION\n";
+print "$hostname has $processorcount processors with platform $platform.\n";
 print "$hostname has identifier $myident\n  (based on $sysident)\n";
 
 our $THREADCOUNT = $processorcount;
@@ -421,6 +423,7 @@ sub SocketThread {
                     if ( $l =~ m/^HELLO/ ) {
                         print $sock "HELLO $VERSION $hostname $myident\n";
                         print $sock "THREADS $THREADCOUNT\n";
+                        print $sock "PLATFORM $platform\n";
                     }
                     elsif ( $l =~ m/^WORK (.+)/ ) {
                         my $json = $1;

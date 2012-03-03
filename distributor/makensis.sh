@@ -13,7 +13,11 @@ FLAGS=$(
     perl -MJSON -nle '$x=from_json($_);while(($k,$v)=each %$x){print "\"-DDISTCLIENT_",uc $k,"=$v\""}' < server.conf
 )
 
-for NSI in fetchdist.nsi distclient.nsi; do
+# Allow selective rebuilding via command-line
+if [ $# -lt 1 ]; then FILES="fetchdist.nsi distclient.nsi"
+else FILES="$@"; fi
+
+for NSI in $FILES; do
   SHORTNAME=`basename "$NSI" .nsi`
   EXE="$SHORTNAME.exe"
   # Pipe into a new shell because the quoting situation in variables
