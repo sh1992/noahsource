@@ -135,7 +135,7 @@ while ( 1 ) {
 continue {
     print 'Disconnecting at ',scalar localtime,".\n";
     $X->Disconnect();
-    $X = undef;
+    delete($X->{PROCESSERROR}); # Undocumented evil hack
     $ipaddr = undef;
     print "Sleeping before reconnecting...\n";
     handle_sockets(1) foreach 1..10;
