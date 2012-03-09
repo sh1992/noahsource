@@ -7,7 +7,7 @@ set -e
 
 # Download spcat binaries for {windows,linux}-{x86,x86_64}
 SPCATBIN=spcat-20111028.tar.gz
-SPCATURL=http://students.ncf.edu/noah.anderson/spec/$SPCATBIN
+SPCATURL=https://dl.dropbox.com/s/sylt8mzjp2vlzui/$SPCATBIN
 [ -f $SPCATBIN ] || wget $SPCATURL
 
 # Rebuild ga-spectroscopy-client (Windows build conducted using MinGW in Wine)

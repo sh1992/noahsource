@@ -5,7 +5,7 @@
 # It's like build-dist.pl, but uses precomputed Perl dependencies
 
 BIN=distclient-template-win32-20111031.tar.xz
-URL=http://students.ncf.edu/noah.anderson/spec/$BIN
+URL=https://dl.dropbox.com/s/sylt8mzjp2vlzui/$BIN
 DISTDIR=out-MSWin32
 
 set -e
