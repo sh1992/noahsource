@@ -3,9 +3,9 @@
 # distclient.pl - Distributed Computing Client
 #
 
-## Support unthreaded Perl via the forks module. WARNING: Very slow.
-#use Config;
-#BEGIN { unless ( $Config{usethreads} ) { require forks; forks->import() } }
+# # Support unthreaded Perl via the forks module. WARNING: Very slow.
+# use Config;
+# use if !$Config{usethreads} forks;
 use threads;
 use threads::shared;
 use FindBin;
@@ -22,13 +22,12 @@ use File::Copy;
 use File::Spec;
 use URI;
 use Archive::Tar;
+use Time::HiRes;
+use if $^O eq 'MSWin32', Win32::API;
 use warnings;
 use strict;
 
-my $HAVE_Win32_API = 0;
-eval 'use Win32::API; $HAVE_Win32_API = 1';
-
-our $VERSION = 20120301;
+our $VERSION = 20120308;
 my $USERAGENT = "distclient.pl/$VERSION";
 my $IPC_PORT = 29482;
 
@@ -58,8 +57,6 @@ my $processorcount = 0;
 my $platform = '';
 my $sysident = '';
 if ( $^O eq 'MSWin32' ) {
-    die "Need Win32::API to collect system statistics on MSWin32"
-        unless $HAVE_Win32_API;
     # On Win32, use GetSystemInfo to find out how many processors we have
     #
     # typedef struct { DWORD  dwOemId; DWORD  dwPageSize;
@@ -172,8 +169,6 @@ print "Using $THREADCOUNT processors\n";
 # Inhibit sleep on Win32
 my $SetThreadExecutionState = undef;
 if ( $^O eq 'MSWin32' ) {
-    die "Need Win32::API to inhibit power saving on MSWin32"
-        unless $HAVE_Win32_API;
     # On Win32, use SetThreadExecutionState to inhibit automatic powersaving
     #
     # typedef DWORD EXECUTION_STATE;
@@ -197,6 +192,11 @@ my %work :shared = ();          # Workunit information
 my @finishedwork :shared = ();  # Work units to be reported as completed
 my @pendingwork :shared = ();   # Work units yet to be started on
 my %status :shared = ();
+
+# Deadline management
+my %deadline :shared = ();      # Deadline tracking for workunits
+my @abortedwork :shared = ();
+my $gracefactor :shared = 1.5;
 
 my $downloading :shared = 0;    # Mutex for download phase
 my $appfiles :shared = 0;       # Mutex for application files
@@ -250,6 +250,33 @@ sub PostStatus {
     }
     while ( defined( my $k = shift(@_) ) && defined( my $v = shift(@_) ) ) {
         $status{$id}{$k} = $v
+    }
+    # Monitor speed
+    if ( $id && exists($status{$id}{mode}) &&
+         ($status{$id}{mode}||'') eq 'WORKING' ) {
+        my $progress = $status{$id}{progress};
+        my $range = $status{$id}{range};
+        if ( defined($range) && defined($progress) && $progress < $range ) {
+            my $dl = $deadline{$id};
+            my $now = Time::HiRes::time;
+            if ( $progress && $dl->{lasttime} && !$dl->{aborted} ) {
+                # Current instantaneous duration/individual
+                my $curdur = $now-$dl->{lasttime};
+                # Expected duration/individual from server
+                my $dur = $work{$id}{duration}/$range;
+                # Use the most optimistic estimate
+                $dur = $curdur if $curdur < $dur;
+                my $endtime = $now+($range-$progress)*$dur;
+                # Will we meet our deadline?
+                if ( $endtime > $deadline{$id}{deadline} ) {
+                    # We won't be meeting our deadline.
+                    print "Aborting $id, won't meet deadline.\n";
+                    $dl->{aborted} = 1;
+                    { lock(@abortedwork); push @abortedwork, $id }
+                }
+            }
+            $dl->{lasttime} = $now unless $dl->{aborted};
+        }
     }
     $callbacks{poststatus}->($status{$id});
 }
@@ -371,6 +398,7 @@ sub SocketThread {
         }
         threads->exit();
     };
+    local $SIG{HUP} = sub { };
     local $SIG{PIPE} = 'IGNORE';
     local $SIG{INT} = 'IGNORE';
 
@@ -403,6 +431,7 @@ sub SocketThread {
         # Connection was successful
         $select->add($sock);
         $wait = 3;              # Reset timeout
+        $gracefactor = 1.5;
         { my $oldfh = select($sock); $| = 1; select($oldfh) }
         PostStatus(undef, mode => 'WAITING');
         my $sockbuf = '';
@@ -429,7 +458,11 @@ sub SocketThread {
                         my $json = $1;
                         my $obj = from_json($json); # FIXME: Crashproof
                         #print $sock "WORKREJECTED\n";
-                        { lock(%work); $work{$obj->{id}} = shared_clone($obj) }
+                        $deadline{$obj->{id}} = shared_clone({});
+                        $deadline{$obj->{id}}{deadline} = Time::HiRes::time +
+                            $obj->{duration}*$gracefactor;
+                        $deadline{$obj->{id}}{aborted} = 0;
+                        $work{$obj->{id}} = shared_clone($obj);
                         {
                             lock(@pendingwork);
                             push @pendingwork, $obj->{id};
@@ -438,6 +471,14 @@ sub SocketThread {
                         #PostStatus($obj->{id}, mode => 'STARTING');
                         print $sock "WORKACCEPTED $obj->{id}\n";
                         DoInhibit();
+                    }
+                    elsif ( $l =~ m/^ABORTWORK\s+(\S+)/ ) {
+                        my $id = $1;
+                        if ( exists($work{$id}) && exists($status{$id}) &&
+                             exists($status{$id}{thread}) &&
+                             $status{$id}{thread} ) {
+                             push @abortedwork, $id;
+                         }
                     }
                     elsif ( $l =~ m/^QUERYWORK/ ) {
                         my @k = keys %work;
@@ -454,9 +495,30 @@ sub SocketThread {
                         PostRawStatus({thread => 0, mode => 'STOPPING'})
                             if uc $1 eq 'QUIT';
                     }
+                    elsif ( $l =~ m/^GRACEFACTOR\s+([0-9.]+)/ ) {
+                        $gracefactor = $1+0;
+                    }
                     #print "$l\n"; # FIXME
                 }
             }
+            # Abort workunits if they were canceled by the server or if we
+            # won't be able to complete them before their deadline.
+            while ( 1 ) {
+                my $id = undef;
+                { lock(@abortedwork); $id = shift @abortedwork }
+                last unless $id;
+                if ( exists($status{$id}) && exists($status{$id}{thread}) ) {
+                    my $thread = ($status{$id}{thread}||0)-1;
+                    if ( $thread >= 0 && $thread < @workthreads ) {
+                        $workthreads[$thread]->kill('SIGHUP');
+                    }
+                }
+                $deadline{$id}{aborted} = 1 if exists($deadline{$id});
+                my $json = to_json({ id => $id,
+                    error => 'Aborted by server or will not meet deadline.' });
+                print $sock "WORKFAILED $json\n";
+            }
+            # Send results for completed workunits.
             while ( 1 ) {
                 my $w = undef;
                 { lock(@finishedwork); $w = shift @finishedwork }
@@ -465,6 +527,7 @@ sub SocketThread {
                 $cmd = 'WORKFAILED' if exists($w->{error}) && $w->{error};
                 delete $status{$w->{id}};
                 delete $work{$w->{id}};
+                delete $deadline{$w->{id}};
                 print $sock "$cmd ", to_json($w), "\n";
                 #PostStatus(undef);
             }
@@ -495,6 +558,7 @@ sub WorkThread {
         # Cleanup
         threads->exit();
     };
+    local $SIG{HUP} = sub { };
     local $SIG{PIPE} = 'IGNORE';
     local $SIG{INT} = 'IGNORE';
     my %app = ();

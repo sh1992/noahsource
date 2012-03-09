@@ -4,7 +4,7 @@
 #
 # It's like build-dist.pl, but uses precomputed Perl dependencies
 
-BIN=distclient-template-win32-20111031.tar.xz
+BIN=distclient-template-win32-20120309.tar.xz
 URL=https://dl.dropbox.com/s/sylt8mzjp2vlzui/$BIN
 DISTDIR=out-MSWin32
 

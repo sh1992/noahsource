@@ -26,7 +26,8 @@ sub Work {
         File::Temp::tempfile("temp-input-XXXXX", DIR => $TEMPDIR,
                              OPEN => 1, EXLOCK => 0, UNLINK => 0);
     foreach my $srcfn ( $conffile, $popfile ) {
-        open IN, '<', $srcfn or return WorkFail($id, "Failed to read $srcfn");
+        open IN, '<', $srcfn or
+            return main::WorkFail($id, "Failed to read $srcfn");
         while ( <IN> ) {
             $nitems++ if m/^I /;
             print $fh $_;
@@ -48,25 +49,21 @@ sub Work {
     main::PostStatus($id, mode => 'WORKING', progress => 0, range => $nitems);
     my $logbuf = "ERROR LOG FOLLOWS (Something went wrong)\n";
     my $rc;
+    my $kill = 0;
+    my $oldsigterm = $SIG{TERM};
     {
-        #my $quit = 0;
         my $pid = 0;
-        local $SIG{TERM} = sub {
-            # If we don't shut down the subprocess before stopping the thread,
-            # Win32 Perl crashes.
-            if ( $pid > 0 ) { print "Killing $pid\n"; kill 'TERM', $pid }
-            close SPEC;
-            print "Worker exiting (3)\n";
-            threads->exit;
-            #$quit = 1;
-        };
+        # If we don't shut down the subprocess before stopping the thread,
+        # Win32 Perl crashes.
+        local $SIG{TERM} = sub { $kill = 2 };
+        local $SIG{HUP} = sub { $kill = 1 };
         #print "$id Starting ./ga-spectroscopy-client \"$infn\" \"$outfn\"\n";
         my $program = File::Spec->catfile(File::Spec->curdir,
                                           'ga-spectroscopy-client');
         my $cmd = "$program \"$infn\" \"$outfn\"";
         $cmd = "nice -n19 $cmd" if $^O ne 'MSWin32';
         $pid = open SPEC, '-|', $cmd
-            or WorkFail($id, 'Cannot start gaspec client');
+            or main::WorkFail($id, 'Cannot start gaspec client');
         # Nice the process on MSWin32. Note that it would be better to do this
         # in CreateProcess...
         if ( $HAVE_Win32_Process ) {
@@ -84,11 +81,16 @@ sub Work {
                 main::PostStatus($id, progress => $i);
             }
             $logbuf .= $_;
+            if ( $kill > 0 ) {
+                if ( $pid > 0 ) { print "Killing $pid\n"; kill 'TERM', $pid }
+                last;
+            }
         }
         #print "$id gaspec done\n";
         $rc = close SPEC;
         unlink $infn; # Remove our temporary input file
     }
+    $oldsigterm->() if $kill >= 2;
 
     # Process finished
     if ( $rc ) { return $outfn }
