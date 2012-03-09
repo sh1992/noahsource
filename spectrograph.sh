@@ -9,7 +9,7 @@ Usage: spectrograph.sh [-f <format>|-p|-P] [-t <title>] [-T <title>]
                        <file>.cat [...] [<match file>.cat]
 
     -f <format>, --format       Format of output plot. Supported formats are
-                                "png" and "postscript".
+                                "png", "postscript", and "latex".
     -p, --png                   Equivalent to --format png.
     -P, --postscript            Equivalent to --format postscript.
     -t <title>, --title         Title in legend for <file> plot.
@@ -67,6 +67,10 @@ case "$FORMAT" in
         FORMAT="postscript"
         EXT=.ps
         ;;
+    latex)
+        FORMAT="epslatex size 6in,4in dl 2"
+        EXT=.tex
+        ;;
     *)
         echo "Invalid output format: $FORMAT"
         ;;
@@ -112,14 +116,19 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
         set term $FORMAT
         set output "$OUT"
         set xrange [$XRANGE]
+        set x2range [$XRANGE]
         set lmargin at screen .1
 EOF
+        [ "$EXT" = ".tex" ] && cat <<EOF
+        set rmargin at screen .98
+EOF
         [ -n "$MATCH" ] && cat <<EOF
-        set size 1,0.5
 
         set multiplot
+        set size 1,0.5
         set origin 0.0,0.5
         unset xtics
+        set x2tics format "" nomirror   # Mirror bottom tics on top plot.
         set bmargin 0
 EOF
         cat <<EOF
@@ -132,7 +141,8 @@ EOF
 
         set origin 0.0,0.0
         set yrange [*:0]
-        set xtics
+        set xtics nomirror  # nomirror to avoid tics along central axis.
+        unset x2tics
         set tmargin 0
         set bmargin -1
         set key bottom
@@ -141,8 +151,8 @@ EOF
 
         unset multiplot
 EOF
-    ) | gnuplot # | tee /tmp/bar | gnuplot
-
+    ) | tee "$BASEFN.gnuplot" | gnuplot # | tee /tmp/bar | gnuplot
+    [ "$EXT" = ".tex" ] && epstopdf "$BASEFN.eps"
 
     if [ "$EXT" = ".png" -a -z "$NOFITNESS" ]; then
         LOGFN=`convert_filename "$ORIGFN" .log.`
