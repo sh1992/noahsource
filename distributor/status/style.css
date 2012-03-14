@@ -1,0 +1,45 @@
+a:hover { text-decoration: underline !important }
+body { margin: 0; padding: 10px; background: white; color: black }
+A:link, A:visited { color: black }
+#head { margin: -10px -10px 10px; background: #eee }
+#headtitle, #head { border-bottom: 1px solid black }
+#headtitle { padding: 5px 5px 5px 47px; background: url(box.png) 10px center no-repeat }
+#headcount {  padding: 5px }
+#headcount, #headconnection * { float: right; border-left: 1px solid black }
+#headconnection * { padding: 5px 5px 5px 26px; background-position: 5px center; background-repeat: no-repeat; display: none }
+#headconnection #connection-loading { background-image: url(hourglass.png); display: block }
+#headconnection #connection-sse { background-image: url(tick.png) }
+#headconnection #connection-sse-error { background-image: url(plug-disconnect.png) }
+#headconnection #connection-plain { background-image: url(arrow-circle-double-135.png) }
+#headconnection #connection-connect { background-image: url(control-000.png); background-color: #cfc }
+#headconnection #connection-disconnect { background-image: url(control-stop-square.png) }
+#nav A { display: block; float: left; width: 7em; text-align: center; border-right: 1px solid black; padding: 5px 0 }
+#nav A.active { font-weight: bold; color: black; text-decoration: none; background: white; padding-bottom: 6px; margin-bottom: -1px }
+#head h1 { margin: 0; padding: 0 }
+#head h1 a { color: black; text-decoration: none }
+body, svg { font-family: "Droid Sans", "DejaVu Sans", Arial, helvetica; font-size: 11pt }
+svg { border: 2px solid black }
+svg rect, svg line { stroke-width: 2; stroke: black; fill: #ccc }
+.node.missing { fill: red; background: red }
+.node.notresponding { fill: orange; background: orange }
+.node.extendedidle { fill: yellow; background: yellow }
+.node.online { fill: #cfc; background: #cfc }
+.node.working { fill: #0f0; background: #0f0 }
+.clear { width:0; height:0; clear: both }
+#listing TABLE { border-collapse: collapse }
+#listing TH { background-color: #eee }
+.tablesorter TH { background: url(sortable.png) no-repeat center right; padding-right: 21px !important }
+.tablesorter TH.headerSortUp { background-image: url(desc.png) }
+.tablesorter TH.headerSortDown { background-image: url(asc.png) }
+#listing TH, #listing TD { border: 1px solid black; padding: 5px }
+#listing TD.col-name { min-width: 12em }
+#listing TD.col-status { min-width: 9em; text-align: center }
+#listing TD.col-threads { text-align: center }
+
+#workunitplot-container { display: none }
+#workunitplot, #workunitplot-toolbar { float: right; clear: right; border: 1px solid black }
+#workunitplot { border-top-width: 0 !important }
+#workunitplot-toolbar { padding: 5px; background: #eee; width:540px }
+#workunitplot-show, #workunitplot-hide { float: left; padding-left: 21px; background-position: 0 center; background-repeat: no-repeat }
+#workunitplot-show { background-image: url(control-000.png) }
+#workunitplot-hide { background-image: url(control-stop-square.png) }
