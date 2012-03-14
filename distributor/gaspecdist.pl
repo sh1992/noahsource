@@ -70,7 +70,8 @@ my @items = ();             # GA Individuals
 my @freeitems = ();         # List of free indexes for @items
 my $askingforworkers = 0;
 my $uniqclientid = 0;
-my $haveworkcache = -1;     # No work available
+my $haveworkcache = 0;      # No work available
+my $starttime = time;
 
 #threads->create(\&mythread);
 mythread();
@@ -116,7 +117,8 @@ sub mythread {
                 $socks{$id} = { id => $id, sock => $client, buf => '',
                                 uniqid => $uniqclientid,
                                 config => '', configfile => undef,
-                                remaining => 0,
+                                remaining => 0, gentime => 0,
+                                lastgentime => 0, genstart => Time::HiRes::time,
                                 files => [[get_app()]], workerspeed => {} };
                 $select->add($client);
             }
@@ -153,6 +155,7 @@ sub WorkReturned {
     my $receivedtime = Time::HiRes::time;
     my $fatal = 0;
     my $nreturned = 0;
+    my $failed = $command eq 'FAILED';
     if ( $reply->{files} && @{$reply->{files}} ) {
         my ($valid, undef, $fn) = @{$reply->{files}[0]};
         my ($checksum, $buf);
@@ -217,36 +220,51 @@ sub WorkReturned {
         # Wrong number of items returned. Make sure no items are still
         # allocated to this workunit.
         warn "Wrong number of items returned\n";
-        foreach my $item ( @items ) {
+        for ( my $i = 0; $i < @items; $i++ ) {
+            my $item = $items[$i];
             next unless $item;
             # FIXME: Assumes numeric source IDs
             next if $source >= 0 && $item->{source} != $source;
             #$foundothers = 1;
             next unless $item->{workunit} eq $reply->{id};
             next unless $item->{sent} > $item->{received};
+            $source = $item->{source};
             # Try sending this item again
             $nreturned = -1;
             $item->{sent} = 0; $item->{received} = 0;
             $item->{workunit} = ''; # FIXME item in multiple workunits?
-            $haveworkcache = 0;
+            $haveworkcache = $i if $i < $haveworkcache;
         }
     }
-    if ( $source >= 0 && $socks{$source}{remaining} <= 0 ) {
+    if ( $source >= 0 && $socks{$source}{remaining} <= 0  && !$failed ) {
         if ( $socks{$source}{remaining} != 0 )
             { warn "Source $source has $socks{$source}{remaining} remaining" }
         if ( !$gasock ) { warn "No gasock" }
         print $gasock "DONE\n";
+        # Provisional generation duration.
+        $socks{$source}{gentime} = Time::HiRes::time-$socks{$source}{genstart};
     }
     # Update workerspeed
-    if ( $source >= 0 && $nreturned > 0 ) {
+    if ( $source >= 0 && ( $nreturned > 0 or $failed ) ) {
         my $wu = $workunits{$reply->{id}};
-        my $n = $wu->{nitems}/($receivedtime-$wu->{sent}); # items/second
-        $n = 1/60 if $n < 1/60;            # Use at least one item/minute
+        my $duration = $receivedtime-$wu->{sent};   # Actual duration
+        my $n = $wu->{nitems}/$duration;            # items/second
+        $n = 1/60 if $n < 1/60 or                   # Minimum one item/minute
+            $failed;                                # Failed workunit penalty
         # FIXME: max speed?
         # Average worker speeds to better accommodate EC2 micro instances
-        my $ws = ($socks{$source}{workerspeed}{$wu->{worker}} ||= []);
-        push @$ws, $n;
-        shift @$ws if @$ws > $WORKERSPEED_AVERAGES;
+        my $ws = ($socks{$source}{workerspeed}{$wu->{worker}} ||= [5/$duration]);
+        #push @$ws, $n;
+        #shift @$ws if @$ws > $WORKERSPEED_AVERAGES;
+        if ( $n < $ws->[0] ) { $ws->[0] = $n }  # Reduce speed immediately
+        elsif ( $wu->{duration}-$duration > 2 ) { $ws->[0] *= 1.1 } # Fast
+        elsif ( $duration-$wu->{duration} > 2 ) { $ws->[0] *= 0.9 } # Slow
+        $ws->[0] = 1/60 if $ws->[0] < 1/60 or $n == 1/60;
+        open F, '>>', '/tmp/workerspeed.log';
+        print F "WORKERSPEED $wu->{worker} ",
+            Time::HiRes::time-$starttime-$duration,' ',
+            $duration," $wu->{duration} $wu->{nitems} $n\n";
+        close F;
     }
     # Dispatch more work
     delete $workunits{$reply->{id}};
@@ -308,6 +326,13 @@ sub HandleSocket {
         elsif ( $l =~ m/^G (\d+)/ ) {
             $socks{$id}{gen} = $1;
             $socks{$id}{wucount} = 'aaa';
+            # Reset the generation timers here in order to support DR
+            # which would have problems if these were to reset on DISPATCH.
+            $socks{$id}{lastgentime} = $socks{$id}{gentime};
+            $socks{$id}{genstart} = Time::HiRes::time;
+            open F, '>>', '/tmp/workerspeed.log';
+            print F "GENTIME ",$socks{$id}{gen}-1," $socks{$id}{lastgentime}\n";
+            close F;
         }
         elsif ( $l =~ m/^I (\d+) (.+)$/ ) {
             my ($origindex, $values) = ($1, $2);
@@ -317,20 +342,21 @@ sub HandleSocket {
         }
         elsif ( $l =~ m/^DISPATCH/ ) {
             # Prepare this generation to be sent
-            my $foundothers = 0;
-            foreach ( @items ) {
-                if ( defined($_) and $_->{source} == $id ) {
-                    $_->{sent} = 0;
-                    $foundothers = 1;
+            my $founditems = 0;
+            for ( my $i = 0; $i < @items; $i++ ) {
+                my $item = $items[$i];
+                if ( defined($item) and $item->{source} == $id ) {
+                    $item->{sent} = 0;
+                    $founditems = 1;
+                    $haveworkcache = $i if $i < $haveworkcache;
                 }
             }
-            # Received empty population (entire population was in the cache)
-            if ( !$foundothers ) {
+            # Received empty population (entire population was in GA cache)
+            if ( !$founditems ) {
                 my $gasock = $socks{$id}{sock};
                 print $gasock "DONE\n";
             }
             else {
-                $haveworkcache = 0;
                 TrySending();
             }
         }
@@ -416,16 +442,29 @@ sub GetNextIndividual {
     my ($client, $from) = @_;
     # Most common case: client=-1 (find any work from any GA). If this failed
     # last time, return a cached response until we get more work.
-    return -1 if $client == -1 && $haveworkcache == -1;
-    for ( my $i = $from+1; $i < @items; $i++ ) {
+    my $i = $from+1;
+    # The work cache keeps this function fast by tracking the starting point
+    # and tracking the existance of available work.
+    $i = $haveworkcache if $client < 0;
+    for ( ; $i < @items; $i++ ) {
         if ( $items[$i] && $items[$i]{sent} == $items[$i]{received} &&
-             ( $client < 0 || $items[$i]{source} == $client ) &&
              $items[$i]{sent} == 0 ) {
-             return $i;
+            # This individual is ready to send.
+            if ( $client >= 0 && $items[$i]{source} != $client ) {
+                # But it's not from the right client. Keep going.
+                $haveworkcache = $i if $i < $haveworkcache;
+                next;
+            }
+            # Update the cache, and return this individual.
+            # Leave the work cache pointer here in case we ignore the return
+            # value (only checking if work exists and not collecting it yet).
+            $haveworkcache = $i if $i < $haveworkcache;
+            return $i;
          }
+         # If we've passed the cache point and the individual was unsendable,
+         # bring the cache point along until we find a sendable individual.
+         $haveworkcache++ if $haveworkcache == $i;
     }
-    # If no work is available whatsoever, cache this until we get more work.
-    $haveworkcache = -1 if $client == -1;
     return -1;
 }
 
@@ -439,8 +478,14 @@ sub SendWork {
     my $client = $items[$i]->{source};
 
     # Workerspeed varies based on GA run settings
-    my $ws = ($socks{$client}{workerspeed}{$worker->{id}} ||= []);
-    my $duration = $WUDURATION+int(5*rand());
+    my $ws = ($socks{$client}{workerspeed}{$worker->{id}} || []);
+    #my $duration = $WUDURATION+int(5*rand());
+    my $remaining = $socks{$client}{lastgentime} ?
+        ( $socks{$client}{lastgentime} -
+          ( Time::HiRes::time - $socks{$client}{genstart} ) ) : 15;
+    my $duration = .5*$remaining;
+    $duration = 2 if $duration < 2;
+    $duration = $WUDURATION if $duration > $WUDURATION;
     my $n = 0;
     if ( @$ws >= 4 ) {
         # Determine the average speed of the worker.
@@ -451,12 +496,15 @@ sub SendWork {
         foreach ( @$ws ) {
             # Weight excessively slow workunits more, excessively fast
             # workunits less.
-            my $w = $_ > 2*$mean ? .707**($_/$mean) : ( $_ < .5*$mean ? 2 : 1);
+            my $w = $_ > 1.1*$mean ? .707**(2*$_/$mean) :
+                    ( $_ < .9*$mean ? 2**(2*$_/$mean) : 1);
             $n += $w*$_;
             $denom += $w;
         }
         $n = $n/$denom*$duration;
+        $n = $n < 1 ? 1 : floor($n);
     }
+    elsif ( @$ws == 1 ) { $n = $ws->[0]*$duration }
     else { $n = 10 } # Just send 10 workunits until we figure out the speed.
 
     # Generate workunit ID
@@ -504,6 +552,8 @@ sub SendWork {
         sent => Time::HiRes::time, duration => $duration,
     };
     print $distsock 'DISPATCH ',to_json($workunits{$wuid}),"\n";
+    # Tell the server that we will issue no more work in the immediate future.
+    print $distsock "NOMOREWORK\n" if GetNextIndividual(-1,-1) < 0;
 }
 
 # Assign an individual to a worker
