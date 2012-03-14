@@ -32,10 +32,15 @@ convert_filename() {
 FORMAT=png
 TITLE=""
 MATCHTITLE=""
-NOFITNESS=""
 XRANGE=""
+OUTFILE=""
+SIZE=""
+NOFITNESS=0
+USETITLE=0
+USEMATCHTITLE=0
 
-TEMP=`getopt -o f:pPtT --long format:,png,postscript,title:match-title:,nofitness,range: \
+TEMP=`getopt -o f:pPt:T:o: \
+     --long format:,png,postscript,title:,match-title:,nofitness,range:,output:,size: \
      -n 'spectrograph.sh' -- "$@"`
 if [ $? != 0 ] ; then
     usage
@@ -48,18 +53,21 @@ while true; do
         -f|--format) FORMAT="$2"; shift 2 ;;
         -p|--png) FORMAT="png"; shift ;;
         -P|--postscript) FORMAT="postscript"; shift ;;
-        -t|--title) TITLE="$2"; shift ;;
-        -T|--match-title) MATCHTITLE="$2"; shift ;;
-        --nofitness) NOFITNESS="1"; shift ;;
+        -t|--title) TITLE="$2"; USETITLE=1; shift 2 ;;
+        -T|--match-title) MATCHTITLE="$2"; USEMATCHTITLE=1 shift 2 ;;
+        -o|--output) OUTFILE="$2"; shift 2 ;;
+        --nofitness) NOFITNESS=1; shift ;;
         --range) XRANGE="$2"; shift 2 ;;
+        --size) SIZE="$2"; shift 2 ;;
         --) shift; break ;;
-        *) echo "Internal error"; exit 1 ;;
+        *) echo "Unexpected option flag: $1"; exit 1 ;;
     esac
 done
 
 case "$FORMAT" in
     png)
-        FORMAT="png size 800,600"
+        [ -z "$SIZE" ] && SIZE="800,600"
+        FORMAT="png size $SIZE"
         #FORMAT="png size 1600,1200 giant"
         EXT=.png
         ;;
@@ -68,7 +76,8 @@ case "$FORMAT" in
         EXT=.ps
         ;;
     latex)
-        FORMAT="epslatex size 6in,4in dl 2"
+        [ -z "$SIZE" ] && SIZE="6in,4in"
+        FORMAT="epslatex size $SIZE dl 2"
         EXT=.tex
         ;;
     *)
@@ -85,7 +94,7 @@ fi
 # Find .CAT file for match
 if [ $# -gt 1 ]; then
     for MATCH; do :; done  # for implicitly loops over command-line arguments
-    [ -z "$MATCHTITLE" ] && MATCHTITLE=`basename "$MATCH" .cat`
+    [ "$USEMATCHTITLE" = 1 ] && MATCHTITLE=`basename "$MATCH" .cat`
 fi
 [ -z "$XRANGE" ] && XRANGE=8700:18300
 
@@ -105,10 +114,13 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
         echo
     fi
     # Generate output plot file
-    if [ -n "$TITLE" ]; then MYTITLE="$TITLE"
+    if [ "$USETITLE" = 1 ]; then MYTITLE="$TITLE"
     else MYTITLE=`basename "$BASEFN"`; fi
 
-    OUT="$BASEFN$EXT"
+    if [ -n "$OUTFILE" ]; then BASEOUT="$OUTFILE"
+    else BASEOUT="$BASEFN"; fi
+    OUT="$BASEOUT$EXT"
+
     FILTER="awk '{print substr(\$0,1,13),substr(\$0,14,8),substr(\$0,22,8)}'"
     echo "$FN" '=>' "$OUT"
     (
@@ -151,8 +163,8 @@ EOF
 
         unset multiplot
 EOF
-    ) | tee "$BASEFN.gnuplot" | gnuplot # | tee /tmp/bar | gnuplot
-    [ "$EXT" = ".tex" ] && epstopdf "$BASEFN.eps"
+    ) | tee "$BASEOUT.gnuplot" | gnuplot
+    [ "$EXT" = ".tex" ] && epstopdf "$BASEOUT.eps"
 
     if [ "$EXT" = ".png" -a -z "$NOFITNESS" ]; then
         LOGFN=`convert_filename "$ORIGFN" .log.`
