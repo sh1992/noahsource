@@ -33,7 +33,7 @@ svg rect, svg line { stroke-width: 2; stroke: black; fill: #ccc }
 .tablesorter TH.headerSortDown { background-image: url(asc.png) }
 #listing TH, #listing TD { border: 1px solid black; padding: 5px }
 #listing TD.col-name { min-width: 12em }
-#listing TD.col-status { min-width: 9em; text-align: center }
+#listing TD.col-status { min-width: 10em; text-align: center }
 #listing TD.col-threads { text-align: center }
 
 #workunitplot-container { display: none }
