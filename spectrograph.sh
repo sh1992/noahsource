@@ -76,7 +76,7 @@ case "$FORMAT" in
         EXT=.ps
         ;;
     latex)
-        [ -z "$SIZE" ] && SIZE="6in,4in"
+        [ -z "$SIZE" ] && SIZE="6in,3.99in"
         FORMAT="epslatex size $SIZE dl 2"
         EXT=.tex
         ;;
@@ -166,7 +166,7 @@ EOF
     ) | tee "$BASEOUT.gnuplot" | gnuplot
     [ "$EXT" = ".tex" ] && epstopdf "$BASEOUT.eps"
 
-    if [ "$EXT" = ".png" -a -z "$NOFITNESS" ]; then
+    if [ "$EXT" = ".png" -a "$NOFITNESS" -ne 0 ]; then
         LOGFN=`convert_filename "$ORIGFN" .log.`
         if [ -f $LOGFN ]; then
             $BINDIR/plotfitness.pl $LOGFN
