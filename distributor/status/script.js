@@ -7,7 +7,7 @@ var statusNames = {
 };
 var nodestatuses = 'working missing notresponding extendedidle online';
 
-var nodes = {}, workunits = {}, nodecount = 0;
+var nodes = {}, workunits = {}, nodecount = 0, threadcount = 0;
 var noderoom = {}, rooms = {};
 
 var sseObj = undefined;
@@ -117,6 +117,10 @@ function update() {
         updateStatusAll();
         // Update node count
         $('.nodecount').text(nodecount);
+        // Update thread count
+        threadcount = 0;
+        for ( i in nodes ) threadcount += parseInt(nodes[i]['threads']);
+        $('.threadcount').text(threadcount);
     }});
 }
 
@@ -217,6 +221,10 @@ function sseMessage(msg, itemtype, id, obj) {
             delete workunits[id];
         }
         else if ( itemtype == 'WORKER' ) {
+            // Update thread count
+            threadcount -= parseInt(nodes[id]['threads']);
+            $('.threadcount').text(threadcount);
+            // Delete worker
             delete nodes[id];
             checkNode(id);
             // Delete its workunits? (Server should inform us)
@@ -238,6 +246,12 @@ function sseMessage(msg, itemtype, id, obj) {
             }
         }
         else if ( itemtype == 'WORKER' ) {
+            // Update thread count
+            if ( nodes[id] && nodes[id]['threads'] )
+                threadcount -= parseInt(nodes[id]['threads']);
+            threadcount += parseInt(obj['threads']);
+            $('.threadcount').text(threadcount);
+            // Update worker
             nodes[id] = obj;
             checkNode(id);
             updateStatus(id);
@@ -256,6 +270,7 @@ function sseConnect() {
                 nodes = {};
                 workunits = {};
                 cleanupNodes();
+                threadcount = 0;
                 update();
                 clockSkew = 0;
                 $('#workunitplot-container').show();
