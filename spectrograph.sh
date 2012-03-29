@@ -166,7 +166,7 @@ EOF
     ) | tee "$BASEOUT.gnuplot" | gnuplot
     [ "$EXT" = ".tex" ] && epstopdf "$BASEOUT.eps"
 
-    if [ "$EXT" = ".png" -a "$NOFITNESS" -ne 0 ]; then
+    if [ "$EXT" = ".png" -a "$NOFITNESS" -eq 0 ]; then
         LOGFN=`convert_filename "$ORIGFN" .log.`
         if [ -f $LOGFN ]; then
             $BINDIR/plotfitness.pl $LOGFN
