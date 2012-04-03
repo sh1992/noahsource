@@ -17,6 +17,7 @@ sub convert_filename {
     my ($in, $outsuffix) = @_;
     $in =~ s/\.($compressre)$//g;
     $in =~ s/\.([a-z0-9]{0,5})$//;
+    $in =~ s/-fitness$//;
     if ( !$outsuffix ) { return $in }
     if ( $outsuffix eq '.log.' ) {
         $outsuffix = '.log';

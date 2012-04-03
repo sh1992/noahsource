@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # spectrograph.sh - Plot SPCAT .CAT file using gnuplot.
 #
@@ -14,7 +14,7 @@ Usage: spectrograph.sh [-f <format>|-p|-P] [-t <title>] [-T <title>]
     -P, --postscript            Equivalent to --format postscript.
     -t <title>, --title         Title in legend for <file> plot.
     -T <title>, --match-title   Title in legend for <match file> plot.
-    --nofitness                 Do not plot fitness (default for non-png)
+    --nofitness                 Do not plot fitness (default for postscript)
     --range <min>:<max>         Frequency range to plot.
     <file>.cat                  SPCAT .CAT file to plot.
     <match file>.cat            SPCAT .CAT file to show underneath main plot.
@@ -73,6 +73,7 @@ case "$FORMAT" in
         ;;
     postscript)
         FORMAT="postscript"
+        NOFITNESS=1
         EXT=.ps
         ;;
     latex)
@@ -94,7 +95,7 @@ fi
 # Find .CAT file for match
 if [ $# -gt 1 ]; then
     for MATCH; do :; done  # for implicitly loops over command-line arguments
-    [ "$USEMATCHTITLE" = 1 ] && MATCHTITLE=`basename "$MATCH" .cat`
+    [ "$USEMATCHTITLE" = 0 ] && MATCHTITLE=`basename "$MATCH" .cat`
 fi
 [ -z "$XRANGE" ] && XRANGE=8700:18300
 
@@ -106,7 +107,7 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
     FN="$BASEFN.cat"
     if [ -f "$BASEFN.int" -a -f "$BASEFN.var" ]; then
         # Regenerate .CAT file
-        $BINDIR/spcat $FN || exit 1
+        "$BINDIR/spcat" "$FN" || exit 1
     else
         echo
         echo WARNING
@@ -121,6 +122,8 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
     else BASEOUT="$BASEFN"; fi
     OUT="$BASEOUT$EXT"
 
+    # Gnuplot does not support fixed width data files, so extract the desired
+    # fields and space-separate them.
     FILTER="awk '{print substr(\$0,1,13),substr(\$0,14,8),substr(\$0,22,8)}'"
     echo "$FN" '=>' "$OUT"
     (
@@ -132,7 +135,7 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
         set lmargin at screen .1
 EOF
         [ "$EXT" = ".tex" ] && cat <<EOF
-        set rmargin at screen .98
+        set rmargin at screen .96
 EOF
         [ -n "$MATCH" ] && cat <<EOF
 
@@ -152,24 +155,25 @@ EOF
         [ -n "$MATCH" ] && cat <<EOF
 
         set origin 0.0,0.0
-        set yrange [*:0]
+        set yrange [0:*] reverse
         set xtics nomirror  # nomirror to avoid tics along central axis.
         unset x2tics
         set tmargin 0
         set bmargin -1
         set key bottom
-        plot "< $FILTER $MATCH" using 1:(-10**(\$3)) with impulses \
+        plot "< $FILTER $MATCH" using 1:(10**(\$3)) with impulses \
                                 title "$MATCHTITLE", 0 lt 0 title ""
 
         unset multiplot
 EOF
     ) | tee "$BASEOUT.gnuplot" | gnuplot
-    [ "$EXT" = ".tex" ] && epstopdf "$BASEOUT.eps"
+    [ "$EXT" = ".tex" ] && epstopdf "$BASEOUT.eps" # Support pdfLaTeX
 
-    if [ "$EXT" = ".png" -a "$NOFITNESS" -eq 0 ]; then
+    if [ "$NOFITNESS" -eq 0 ]; then
         LOGFN=`convert_filename "$ORIGFN" .log.`
-        if [ -f $LOGFN ]; then
-            $BINDIR/plotfitness.pl $LOGFN
+        FITDATFN=`convert_filename "$ORIGFN" -fitness.dat`
+        if [ -f "$LOGFN" ] || [ -f "$FITDATFN" ]; then
+            $BINDIR/plotfitness.pl "$LOGFN"
         else
             echo
             echo WARNING: No log file, not creating fitness plot
