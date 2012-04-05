@@ -36,7 +36,9 @@ die "Usage: $0 <BEST|ITEM> <templatebasename> <files>\n"
 
 foreach my $fn ( @ARGV ) {
     my $logfn = convert_filename($fn, '.log.');
-    sub got_item {
+    print "$logfn\n";
+
+    my $got_item = sub {
         my %params = @_;
         my $outbasename = convert_filename($logfn,
             "-$params{generation}-$params{individual}");
@@ -49,7 +51,7 @@ foreach my $fn ( @ARGV ) {
             print OUT $buf;
             close OUT;
         }
-    }
-    parse_logfile($logfn, $kind => \&got_item)
+    };
+    parse_logfile($logfn, $kind => $got_item)
         or die "Can't parse logfile $fn ($!?)";
 }

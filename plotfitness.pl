@@ -32,32 +32,33 @@ foreach my $fn ( @ARGV ) {
     my $outfn = convert_filename($output||$fn,'-fitness'.$outsuffix);
     my $datfn = convert_filename($fn,'-fitness.dat');
     my $gpfn = convert_filename($output||$fn,'-fitness.gnuplot');
+    print "$logfn\n";
 
     my $hasdynmut = 0;
     my ($sectot, $secgen) = (0, 0);
     my $ytop = 0;
     # Callback handlers for parse_logfile
     my @gens = ();
-    sub got_dynm {
+    my $got_dynm = sub {
         my %params = @_;
         $hasdynmut = 1 if defined($params{leading});
         $gens[$params{generation}]{avg} = $params{avg}
             if defined($params{avg});
         $gens[$params{generation}]{$_} = $params{$_}
             foreach qw/leading trailing difference mutationrate/;
-    }
-    sub got_best {
+    };
+    my $got_best = sub {
         my %params = @_;
         $gens[$params{generation}]{gen} = $params{generation};
         $gens[$params{generation}]{best} = $params{fitness};
         $ytop = int($params{fitness});
-    }
-    sub got_time {
+    };
+    my $got_time = sub {
         my %params = @_;
         $sectot = $params{total}; $secgen = $params{genavg};
-    }
-    if ( parse_logfile($logfn, dynm => \&got_dynm, best => \&got_best,
-                               time => \&got_time) ) {
+    };
+    if ( parse_logfile($logfn, dynm => $got_dynm, best => $got_best,
+                               time => $got_time) ) {
         $datfn = convert_filename($output||$fn,'-fitness.dat');
         $ytop++;
 
@@ -84,7 +85,7 @@ foreach my $fn ( @ARGV ) {
         close F;
     }
     else {
-        die "\n\nERROR: No fitness data or log file for $fn\n\n\n";
+        die "\n\nERROR: No fitness data or log file for $fn: $!\n\n\n";
     }
 
     my $title = defined($mytitle) ? $mytitle : $fn;

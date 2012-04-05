@@ -30,15 +30,16 @@ foreach my $fn ( @ARGV ) {
     my $outfn = convert_filename($output||$fn,'-params'.$outsuffix);
     my $datfn = convert_filename($fn,'-params.dat');
     my $gpfn = convert_filename($output||$fn,'-params.gnuplot');
+    print "$logfn\n";
 
     my @values = ();
     # Parse the logfile
-    sub got_item {
+    my $got_item = sub {
         my %params = @_;
         # Get an array slice of the parameter values
         push @values, [$params{generation}, @{$params{params}}];
-    }
-    if ( parse_logfile($fn, best => \&got_item) ) {
+    };
+    if ( parse_logfile($logfn, best => $got_item) ) {
         $datfn = convert_filename($output||$fn,'-params.dat');
         open DAT, '>', $datfn or die "Cannot open output file $datfn: $!";
         foreach ( @values ) {
@@ -46,8 +47,15 @@ foreach my $fn ( @ARGV ) {
         }
         close DAT;
     }
-    elsif ( !-f $datfn ) {
-        die "\n\nERROR: No parameter data or log file for $fn\n\n\n";
+    elsif ( open F, '<', $datfn ) {
+        print "\n\nWARNING: Using preexisting parameter data file $datfn\n\n\n";
+        while (my $l = <F> ) {
+            push @values, [split ' ', $l];
+        }
+        close F;
+    }
+    else {
+        die "\n\nERROR: No parameter data or log file for $fn: $!\n\n\n";
     }
 
     my $title = defined($mytitle) ? $mytitle : $fn;
