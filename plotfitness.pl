@@ -28,37 +28,37 @@ elsif ( $format eq 'latex' ) { $term = 'epslatex size 6in,3.99in dl 2'; $outsuff
 else { die "Undefined format: $format\n" }
 
 foreach my $fn ( @ARGV ) {
+    my $logfn = convert_filename($fn,'.log.');
+    my $outfn = convert_filename($output||$fn,'-fitness'.$outsuffix);
+    my $datfn = convert_filename($fn,'-fitness.dat');
+    my $gpfn = convert_filename($output||$fn,'-fitness.gnuplot');
+
     my $hasdynmut = 0;
     my ($sectot, $secgen) = (0, 0);
     my $ytop = 0;
-    my $logfn = convert_filename($fn,'.log.');
-    my $f = open_compressed($logfn);
-    my $outfn = convert_filename($output||$fn,'-fitness'.$outsuffix);
-    my $datfn = convert_filename($f ? ($output||$fn) : $fn,'-fitness.dat');
-    my $gpfn = convert_filename($output||$fn,'-fitness.gnuplot');
-    if ( $f ) {
-        my @gens = ();
-        while (<$f>) {
-            if ( m/DYNM (\d+) (?:AVG\s+(-?[.0-9]+))?(\s+A\s+(-?[.0-9]+)\s+B\s+(-?[.0-9]+)\s+D\s+(-?[.0-9]+)\s+R\s+(-?[.0-9]+))?/ ) {
-                my ($gen,$mean,$x,$a,$b,$d,$r) = ($1,$2,$3,$4,$5,$6,$7);
-                $hasdynmut = 1 if $x;
-                $gens[$gen]{avg} = $mean if defined($mean);
-                $gens[$gen]{leading} = $a;
-                $gens[$gen]{trailing} = $b;
-                $gens[$gen]{difference} = $d;
-                $gens[$gen]{mutationrate} = $r;
-            }
-            elsif ( m/BEST (\d+).+orig\s+(-?[.0-9]+)/ ) {
-                my ($gen,$max) = ($1,$2);
-                $gens[$gen]{gen} = $gen;
-                $gens[$gen]{best} = $max;
-                $ytop = int($max);
-            }
-            elsif ( m/AVRG (\d+)\s+(-?[.0-9]+)/ ) { $gens[$1]{avg} = $2 } # Old style
-            elsif ( m/Took ([.0-9]+) seconds \(([.0-9]+) sec\/gen\)/ )
-                { $sectot = $1; $secgen = $2 }
-        }
-        close $f;
+    # Callback handlers for parse_logfile
+    my @gens = ();
+    sub got_dynm {
+        my %params = @_;
+        $hasdynmut = 1 if defined($params{leading});
+        $gens[$params{generation}]{avg} = $params{avg}
+            if defined($params{avg});
+        $gens[$params{generation}]{$_} = $params{$_}
+            foreach qw/leading trailing difference mutationrate/;
+    }
+    sub got_best {
+        my %params = @_;
+        $gens[$params{generation}]{gen} = $params{generation};
+        $gens[$params{generation}]{best} = $params{fitness};
+        $ytop = int($params{fitness});
+    }
+    sub got_time {
+        my %params = @_;
+        $sectot = $params{total}; $secgen = $params{genavg};
+    }
+    if ( parse_logfile($logfn, dynm => \&got_dynm, best => \&got_best,
+                               time => \&got_time) ) {
+        $datfn = convert_filename($output||$fn,'-fitness.dat');
         $ytop++;
 
         # Write fitness data file
@@ -103,19 +103,23 @@ set format y "-%g"
 set xrange [0:*]
 set style data lines
 set key left Left reverse
+END
+    print G <<END if $format eq 'latex';
 set lmargin at screen .14
 set rmargin at screen .96
 END
     print G "set title \"$title\"\n" if $title;
     print G 'set xlabel "Generation',
         ($sectot&&$secgen)?" (Took $sectot sec, $secgen sec/gen)":'',"\"\n";
-    print G <<END if $hasdynmut;
-set rmargin at screen .9
+    if ( $hasdynmut ) {
+        print G "set rmargin at screen .9\n" if $format eq 'latex';
+        print G <<END;
 set y2range [0:.1]
 set y2tics 0,.05,.1
 set grid y2tics
 set y2label "Mutation rate, 0-1"
 END
+    }
     my ($lt1,$lt2) = $format eq 'latex' ? (2,1) : (1,2);
     print G "plot '$datfn' using 1:(-\$3) lt $lt2 title 'Fitness of Best Individual' \\\n";
     print G "   , '$datfn' using 1:(-\$2) lt $lt1 title 'Average Fitness of Population' \\\n";
