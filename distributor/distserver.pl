@@ -87,6 +87,7 @@ while ( 1 ) {
                     $totaldistributors--;
                     $idledistributors-- if $clients{$id}{idle};
                 }
+                close($sock);
                 $select->remove($sock);
                 delete $clients{$id};
             }
