@@ -87,8 +87,16 @@ while ( 1 ) {
                     $totaldistributors--;
                     $idledistributors-- if $clients{$id}{idle};
                 }
-                close($sock);
+                elsif ( $clients{$id}{kind} == 3 ) {
+                    # Remove monitor from list.
+                    for ( my $i = 0; $i < @monitors; $i++ ) {
+                        next unless $monitors[$i] eq $sock;
+                        splice @monitors, $i, 1;
+                        last;
+                    }
+                }
                 $select->remove($sock);
+                close($sock);
                 delete $clients{$id};
             }
             # Cancel jobs attached to worker
@@ -314,6 +322,7 @@ while ( 1 ) {
                 }
                 elsif ( $l =~ m/^MONITOR/ ) {
                     push @monitors, $sock;
+                    $clients{$id}{kind} = 3;
                     foreach ( values %workers ) {
                         next unless exists($_->{name}) and defined($_->{name});
                         next unless exists($_->{sock}) and defined($_->{sock});
