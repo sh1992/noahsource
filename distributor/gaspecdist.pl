@@ -372,7 +372,9 @@ sub HandleSocket {
             # Remove existing configuration items and dependency files.
             # Note: By default, perlre's $ will ignore newlines at the end of
             #       the string.
-            if ( $socks{$id}{config} =~
+            # Do NOT do this for amin, amax, ..., delkmin, delkmax, as those
+            # options can be specified multiple times.
+            if ( $opt !~ m/(min|max)$/ && $socks{$id}{config} =~
                     s/(^|\n)CFG[A-Z0-9] $opt( ([^\n]*))?(\n|$)/$1/ &&
                  @suffixes && $3 ) {
                 # Remove obsolete dependency files
