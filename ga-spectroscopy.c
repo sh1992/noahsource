@@ -35,7 +35,7 @@
 #endif
 
 #ifdef _WIN32
-#include <windows.h> /* We use CreateProcess to replace invisible_system */
+#include <windows.h>    /* We use CreateProcess to replace invisible_system */
 #else
 #include <sys/socket.h>
 #include <netdb.h>
@@ -43,18 +43,15 @@
 int invisible_system(int stdoutfd, int argc, ...);
 #endif
 
-#ifndef O_NOFOLLOW
-/* If O_NOFOLLOW is unsupported, we probably don't support symlinks anyway. */
+#ifndef O_NOFOLLOW      /* If unsupported, symlinks probably aren't either. */
 #define O_NOFOLLOW 0
 #endif
 
-#define BINS 600		/* Number of bins to use for comparison */
-#define RANGEMIN 8700		/* Ignore below this frequency */
-#define RANGEMAX 18300		/* Ignore above this frequency */
+#define BINS 600        /* Number of bins to use for comparison */
+#define RANGEMIN 8700   /* Ignore below this frequency */
+#define RANGEMAX 18300  /* Ignore above this frequency */
 
-#define SEGMENTS 8		/* See also fprintf in generate_input_files */
-
-/* char tempdir[16]; */
+#define SEGMENTS 8      /* Number of segments for each spectral component */
 
 /* Transparent compression: Supported compression programs. */
 #define COMP_EXT 0
@@ -73,7 +70,8 @@ char *compressors[][2] = {
 const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
 #define QN_COUNT 2
-#define QN_DIGITS 3
+/* 4th QN appears with multiple components; indicates component peak is from */
+#define QN_DIGITS 4
 /** One row of a .CAT file */
 typedef struct {
   float frequency, error, intensity;
@@ -89,35 +87,37 @@ typedef struct {
 } dblres_relation;
 /** Thread-local data */
 typedef struct {
-  datarow *compdata;		/* Data storage for comparison */
+  datarow *compdata;            /* Data storage for comparison */
   int compdatasize, compdatacount;
 #ifndef USE_SPCAT_OBJ
-  char *basename_temp;		/* Basename of temporary file */
+  char *basename_temp;          /* Basename of temporary file */
 #endif
   dblres_check *drlist;
   int drsize;
 } specthreadopts_t;
 /** Settings */
 typedef struct {
-  char *basename_out;		/* Basename of output file */
-  char *template_fn;		/* Filename of template file */
-  char *obsfile;		/* Observation file */
-  char *spcatbin;		/* SPCAT program file */
-  unsigned int bins;		/* Number of bins */
+  char *basename_out;           /* Basename of output file */
+  char *template_fn;            /* Filename of template file */
+  char *obsfile;                /* Observation file */
+  char *spcatbin;               /* SPCAT program file */
+  unsigned int bins;            /* Number of bins */
   float binscale;               /* Scaling to apply each generation */
   unsigned int randbins;        /* Use random binning */
   unsigned int scaledbins;      /* Current bins, if changes each generation */
   float distanceweight;
-  int stdoutfd, devnullfd;	/* File descriptors used to hide SPCAT output */
-  datarow *observation;		/* Data storage for observation */
+  int stdoutfd, devnullfd;      /* File descriptors used to hide SPCAT output */
+  datarow *observation;         /* Data storage for observation */
   int observationsize, observationcount;
-  char template[2][2048];	/* Input file template */
-  int userange[SEGMENTS];
-  int rangetemp[SEGMENTS];
-  int initialerror[SEGMENTS];
+  char template[2][2048];       /* Input file template (FIXME: Fixed length) */
   float errordecay;
-  GA_segment rangemin[SEGMENTS];
-  GA_segment rangemax[SEGMENTS];
+  unsigned int *userange;       /* Size of range params SEGMENTS*rangesize */
+  unsigned int *rangetemp;
+  GA_segment *rangemin;
+  GA_segment *rangemax;
+  unsigned int *initialerror;   /* Size is also SEGMENTS*rangesize */
+  unsigned int rangesize;       /* Number of components with range bounds */
+  unsigned int componentcount;  /* Number of components being fit */
   char *popfile;
   GA_segment *popdata;
   char *drfile;
@@ -235,6 +235,7 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
   int i = 0, j = 0;
   while ( 1 ) {
     float freq, err, lgint;
+    int qntype = 0;
     struct {
       /* This struct stores the split fields of the cat file. */
       char freq[14], err[9], lgint[9], dr[3], elo[11], gup[4], tag[8],
@@ -253,12 +254,12 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
     i = fscanf(fh, "%13c%8c%8c%2c%10c%3c%7c%4c%127[^\r\n]", s.freq, s.err,
                s.lgint, s.dr, s.elo, s.gup, s.tag, s.qnfmt, s.qn);
     if ( i == EOF && ferror(fh) ) {
-      printf("Failed to read CAT file, errno=%d\n", errno);
+      printf("Failed to read CAT file: %s\n", strerror(errno));
       return 3;
     }
     else if ( i == EOF ) break;
     else if ( i != 9 ) {
-      printf("File format error, fscanf errno=%d\n", errno);
+      printf("File format error. fscanf: %s\n", strerror(errno));
       return 4;
     }
 
@@ -268,7 +269,7 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
     if ( errno == 0 ) err   = strtof(s.err,   NULL);
     if ( errno == 0 ) lgint = strtof(s.lgint, NULL);
     if ( errno != 0 ) {
-      printf("File format error, strtof errno=%d\n", errno);
+      printf("File format error. strtof: %s\n", strerror(errno));
       return 4;
     }
 
@@ -278,8 +279,8 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
       //printf("Increasing memory allocation to %u\n", thrs->compdatasize);
       *storage = realloc(*storage, sizeof(datarow)*(*size));
       if ( *storage == NULL ) {
-	printf("Out of memory, errno=%d\n", errno);
-	return 5;
+        printf("Out of memory: %s\n", strerror(errno));
+        return 5;
       }
     }
 
@@ -291,14 +292,15 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
     (*storage)[*count].intensity = lgint;
 
     /* Double resonance from trailing data */
-    /* Ensure quantum numbers are of type 303 */
-    /* PROGRAM DOES NOT SUPPORT VARIABLE QUANTUM NUMBER TYPES */
-    if ( strcmp(s.qnfmt, " 303") != 0 ) {
-      printf("CAT file does not has QNFMT %s, not 303.\n", s.qnfmt);
+    /* Ensure quantum numbers are of type " 303" or "1404" */
+    if ( strcmp(s.qnfmt, "1404") == 0 ) qntype = 4;
+    else if ( strcmp(s.qnfmt, " 303") == 0 ) qntype = 3;
+    if ( qntype < 1 || qntype > QN_DIGITS ) {
+      printf("CAT file has unsupported QNFMT '%s'.\n", s.qnfmt);
       return 4;
     }
     for ( i = 0; i < 2; i++ ) {
-      for ( j = 0; j < 3; j++ ) {
+      for ( j = 0; j < qntype; j++ ) {
         char str[3]; int val;
         str[0] = s.qn[12*i+j*2];
         str[1] = s.qn[12*i+j*2+1];
@@ -307,8 +309,10 @@ int load_catfile(FILE *fh, datarow **storage, int *size, int *count) {
         //printf("'%s'\n",trailing);
         if ( val == -9999 ) return 6;
         //printf(" %d", val);
-        (*storage)[*count].qn[i*3+j] = val;
+        (*storage)[*count].qn[i*QN_DIGITS+j] = val;
       }
+      /* Fill remaining places with 0. */
+      for ( ; j < QN_DIGITS; j++ ) (*storage)[*count].qn[i*QN_DIGITS+j] = 0;
     }
     //printf("\n");
     /* Next item */
@@ -339,105 +343,142 @@ int load_spec_observation(specopts_t *opts) {
 
 #ifdef USE_SPCAT_OBJ
 #error Not updated for new template format
-int generate_input_buffers(specopts_t *opts, char *buffers[], size_t bufsizes[], GA_segment *x) {
+int generate_input_buffers(specopts_t *opts, char *buffers[],
+                           size_t bufsizes[], GA_segment *x) {
   int i;
   for ( i = 0; i < 2; i++ ) {
-    if ( ( bufsizes[i] = asprintf(&buffers[i], opts->template[i], x[0], x[1], x[2]) ) < 0 )
-      return i+1;
+    bufsizes[i] = asprintf(&buffers[i], opts->template[i], x[0], x[1], x[2]);
+    if ( bufsizes[i] < 0 ) return i+1;
   }
   return 0;
 }
 #else
 int generate_input_files(specopts_t *opts, unsigned int generation,
-                         char *basename, GA_segment *x) {
+                         char *basename, GA_segment *x, unsigned int subfile) {
   char filename[128];
   int i;
-  /* Render DJK to strings */
-  char djkstr[5][16];
-  for ( i = 0; i < 5; i++ ) {
-    GA_segment v = x[3+i];
-    const int zero = ~(1<<(GA_segment_size-1)); // (0xfff...fff)/2
-    sprintf(djkstr[i], "%s%u", (v > zero) ? "-" : "",
-            (v > zero) ? (v-zero) : (zero-v));
-  }
   /* Output data files */
   for ( i = 0; i < 2; i++ ) {
+    int retval = -(2*subfile+i+1); /* FIXME: Include sub-inputfile? */
+    char *tmpl = opts->template[i];
     FILE *fh;
-    int oldj = 0, j = 0, parsemode = 0;
+    int oldj = 0, j = 0, parsemode = 0, nrecord = 0;
     snprintf(filename, sizeof(filename), "%s.%s", basename,
-	     input_suffixes[i]);
+             input_suffixes[i]);
     if ( ( fh = fopen(filename, "w") ) == NULL ) {
-      printf("Failed to open input file, errno=%d\n", errno);
-      return i+1;
+      printf("Failed to open input file: %s\n", strerror(errno));
+      return retval;
     }
     for ( j = 0; /* None, uses break */; j++ ) {
-      char c = opts->template[i][j];
-      if ( ( c == '%' ) || ( c == 0 ) ) {
+      char c = tmpl[j];
+      if ( ( c == '%' ) || ( c == '$' ) || ( c == 0 ) ) {
         int nitems = j-oldj;
         if ( parsemode == 0 ) {
           /* Write the data out directly */
-          if ( nitems ) {
-            size_t rc = fwrite(opts->template[i]+oldj, 1, nitems, fh);
+          if ( nitems && nrecord == subfile ) {
+            size_t rc = fwrite(tmpl+oldj, 1, nitems, fh);
             if ( rc != nitems ) {
-              printf("template: Write failed (tried to write %d, rc=%d)\n", nitems, rc);
-              return i+1;
+              printf("template: Write failed (tried to write %d, rc=%d)\n",
+                     nitems, rc);
+              return retval;
             }
           }
-          parsemode = 1;
+          if ( c == '$' ) {
+            /* Delete up to end of line, including end-of-line characters. */
+            int hadnewline = 0;
+            while ( tmpl[j+1] != 0 && tmpl[j+1] != '$' ) {
+              if ( tmpl[j] == '\r' || tmpl[j] == '\n' ) hadnewline = 1;
+              if ( !hadnewline || tmpl[j+1] == '\r' || tmpl[j+1] == '\n' ) j++;
+              else break;
+            }
+            /* $$ for literal $ */
+            if ( tmpl[j+1] == '$' ) {
+              c = 1; /* Dummy value that's not 0 and not $ */
+              j++;
+              if ( nrecord == subfile && fputc('$', fh) == EOF ) {
+                printf("template: Write failed (tried to write $, got error)\n");
+                return retval;
+              }
+            }
+            parsemode = 0;
+          }
+          else parsemode = c;
         }
-        else {
+        else if ( parsemode == '%' ) {
           /* Parse the data as an escape */
-          if ( nitems <= 0 ) {
+          if ( nrecord != subfile ) { /* Don't write anything yet */ }
+          else if ( nitems <= 0 ) {
             /* %% means a plain % sign */
             if ( fputc('%', fh) == EOF ) {
               printf("template: Write failed (tried to write %%, got error)\n");
-              return i+1;
+              return retval;
             }
           }
           else {
             /* Named escape, extract it */
             char escape[8], type;
-            int index = 0;
+            int index = 0, modindex = 0;
             memset(escape, 0, sizeof(escape));
             if ( nitems > 7 || nitems < 1 ) {
               printf("template: Named escape is too long or too short\n");
-              return i+1;
+              return retval;
             }
-            strncpy(escape, opts->template[i]+oldj, nitems);
+            strncpy(escape, tmpl+oldj, nitems);
             index = atoi(escape+1);
+            modindex = index % SEGMENTS;
             type = escape[0];
             if ( type == 'g' ) {
               /* Render field properly in exp-notation */
-              if ( index == 0 ) /* A */
-                fprintf(fh, "%uE-05", x[0]);
-              else if ( index == 1 ) /* B */
-                fprintf(fh, "%uE-05", opts->linkbc?((x[1]+x[2])/2):x[1]);
-              else if ( index == 2 ) /* C */
-                fprintf(fh, "%uE-05", opts->linkbc?((x[1]-x[2])/2):x[2]);
-              else if ( index < SEGMENTS ) /* DJ, DJK, DK, delJ, delK */
-                fprintf(fh, "%sE-12", djkstr[index-3]);
+              if ( modindex == 0 ) /* A */
+                fprintf(fh, "%uE-05", x[index]);
+              else if ( modindex == 1 ) /* B */
+                fprintf(fh, "%uE-05", opts->linkbc?((x[index]+x[index+1])/2):
+                                                   x[index]);
+              else if ( modindex == 2 ) /* C */
+                fprintf(fh, "%uE-05", opts->linkbc?((x[index-1]-x[index])/2):
+                                                   x[index]);
+              else if ( modindex < SEGMENTS ) { /* DJ, DJK, DK, delJ, delK */
+                /* Handle zero point */
+                GA_segment v = x[index];
+                const int zero = ~(1<<(GA_segment_size-1)); // (0xfff...fff)/2
+                fprintf(fh, "%s%uE-12", (v > zero) ? "-" : "",
+                        (v > zero) ? (v-zero) : (zero-v));
+              }
               else {
                 printf("template: Index too large %d\n", index);
-                return i+1;
+                return retval;
               }
               /* FIXME: Error checking for fprintf? */
             }
             else if ( type == 'e' ) {
               /* FIXME: Error handling within gaspec */
               if ( opts->initialerror[index] && opts->errordecay != 0 ) {
-                fprintf(fh, "%g", 1e-5*powf(opts->errordecay, generation)*opts->initialerror[index]);
+                fprintf(fh, "%g", 1e-5*powf(opts->errordecay, generation)*
+                                  opts->initialerror[index]);
               }
               else fprintf(fh, "0");
             }
             else {
               printf("template: Unknown escape type %c\n", type);
-              return i+1;
+              return retval;
             }
           }
           parsemode = 0;
         }
         oldj = j+1;
-        if ( c == 0 ) break; /* End of template */
+        if ( c == 0 ) { /* End of template. Next subfile is first one. */
+          if ( i == 1 ) subfile = 0;
+          break;
+        }
+        if ( c == '$' ) {
+          /* End of subfile. If not got correct subfile, proceed onwards.
+             Otherwise, return, indicating another subfile available. */
+          if ( nrecord < subfile ) nrecord++;
+          else {
+            if ( i == 1 ) subfile++;
+            break;
+          }
+        }
       }
     }
 #if 0
@@ -451,11 +492,11 @@ int generate_input_files(specopts_t *opts, unsigned int generation,
     /* Error checking for fprintf? */
 #endif
     if ( fclose(fh) ) {
-      printf("Failed to close input file, errno=%d\n", errno);
-      return i+1;
+      printf("Failed to close input file: %s\n", strerror(errno));
+      return retval;
     }
   }
-  return 0;
+  return subfile;
 }
 #endif
 
@@ -478,8 +519,30 @@ ssize_t my_getline(char **lineptr, size_t *n, FILE *stream) {
   return index;
 }
 
+/** Resize segment range (and initialerror) options in specopts due to
+ *  multiple specification on command-line. Resizes in multiples of SEGMENTS.
+ */
+void realloc_specopts_range(specopts_t *so, int newrs) {
+  int i = 0, oldsize = SEGMENTS*so->rangesize, newsize = SEGMENTS*newrs;
+  if ( newrs <= so->rangesize ) return;
+  so->rangesize = newrs;
+  if ( !(so->userange = realloc(so->userange, sizeof(void *)*newsize)) )
+    { printf("Out of memory (specopts.userange)\n"); exit(1); }
+  if ( !(so->rangetemp = realloc(so->rangetemp, sizeof(void *)*newsize)) )
+    { printf("Out of memory (specopts.rangetemp)\n"); exit(1); }
+  if ( !(so->rangemin = realloc(so->rangemin, sizeof(void *)*newsize)) )
+    { printf("Out of memory (specopts.rangemin)\n"); exit(1); }
+  if ( !(so->rangemax = realloc(so->rangemax, sizeof(void *)*newsize)) )
+    { printf("Out of memory (specopts.rangemax)\n"); exit(1); }
+  if ( !(so->initialerror = realloc(so->initialerror, sizeof(void *)*newsize)) )
+    { printf("Out of memory (specopts.initialerror)\n"); exit(1); }
+  for ( i = oldsize; i < newsize; i++ ) /* Initialize new fields */
+    so->userange[i] = so->rangetemp[i] = so->rangemin[i] =
+      so->rangemax[i] = so->initialerror[i] = 0;
+}
+
 int my_parseopt(const struct option *long_options, GA_settings *settings,
-		int c, int option_index) {
+                int c, int option_index) {
   switch (c) {
   case 'o':
     ((specopts_t *)settings->ref)->basename_out = optarg;
@@ -511,9 +574,13 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 32: /* deljmin */
   case 34: /* delkmin */
     {
-      int i = c/2-10;
-      ((specopts_t *)settings->ref)->rangemin[i] = atoi(optarg);
-      ((specopts_t *)settings->ref)->userange[i] = 1;
+      int i = c/2-10, j = 0, count = 0;
+      specopts_t *so = settings->ref;
+      so->userange[i]++;
+      count = so->userange[i];
+      realloc_specopts_range(so, count);
+      so->rangemin[i+(count-1)*SEGMENTS] = atoi(optarg);
+      for ( j = 0; j < count; j++ ) so->userange[i+j*SEGMENTS] = count;
     }
     break;
   case 21: /* amax */
@@ -525,9 +592,13 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
   case 33: /* deljmax */
   case 35: /* delkmax */
     {
-      int i = (c-1)/2-10;
-      ((specopts_t *)settings->ref)->rangemax[i] = atoi(optarg);
-      ((specopts_t *)settings->ref)->rangetemp[i] = 1;
+      int i = (c-1)/2-10, j = 0, count = 0;
+      specopts_t *so = settings->ref;
+      so->rangetemp[i]++;
+      count = so->rangetemp[i];
+      realloc_specopts_range(so, count);
+      so->rangemax[i+(count-1)*SEGMENTS] = atoi(optarg);
+      for ( j = 0; j < count; j++ ) so->rangetemp[i+j*SEGMENTS] = count;
     }
     break;
   case 38: /* rangemin */
@@ -585,6 +656,9 @@ int my_parseopt(const struct option *long_options, GA_settings *settings,
     break;
   case 58: /* random-bins */
     ((specopts_t *)settings->ref)->randbins = optarg ? atoi(optarg) : 10;
+    break;
+  case 59: /* cooperative-mode */
+    ((specopts_t *)settings->ref)->componentcount = atoi(optarg);
     break;
   default:
     printf("Aborting: %c\n",c);
@@ -736,7 +810,7 @@ int main(int argc, char *argv[]) {
     {"drfile",     required_argument, 0, 40},
     /** --drtol TOLERANCE
      *
-     * Matching tolerance 
+     * Matching tolerance.
      */
     {"drtol",      required_argument, 0, 41},
     /** --linkbc
@@ -774,7 +848,12 @@ int main(int argc, char *argv[]) {
      *
      * Use a random number of bins each generation
      */
-    {"random-bins", required_argument, 0, 58}, /* FIXME: Optional, sensible default */
+    {"random-bins", required_argument, 0, 58}, /* FIXME: Optional default */
+    /** --components
+     *
+     * Number of components to fit
+     */
+    {"components", required_argument, 0, 59},
     {0, 0, 0, 0}
   };
 #ifdef CLIENT_ONLY
@@ -782,13 +861,13 @@ int main(int argc, char *argv[]) {
   unsigned int generation = 0;
 #else
   char *my_optstring = "o:t:m:b:S:w:P:";
-  char *optlog = malloc(128);	/* Initial allocation */
+  char *optlog = malloc(128);   /* Initial allocation */
 
   if ( !optlog ) { printf("Out of memory (optlog)\n"); exit(1); }
   optlog[0] = 0;
 
   GA_defaultsettings(&settings);
-  settings.debugmode = 0;	/* Use non-verbose output */
+  settings.debugmode = 0;       /* Use non-verbose output */
   settings.popsize = 64;
   settings.generations = 200;
 #endif
@@ -805,9 +884,11 @@ int main(int argc, char *argv[]) {
   specopts.tempdir = "temp";
   specopts.bins = BINS;
   specopts.distanceweight = 1.0;
-  for ( i = 0; i < SEGMENTS; i++ )
-    specopts.userange[i] = specopts.rangetemp[i] = specopts.rangemin[i] =
-      specopts.rangemax[i] = specopts.initialerror[i] = 0;
+  /* These are resized during option parsing */
+  specopts.userange = specopts.rangetemp = specopts.rangemin =
+    specopts.rangemax = specopts.initialerror = NULL;
+  specopts.rangesize = 0;
+  realloc_specopts_range(&specopts, 1); /* Initialize to one component */
   specopts.errordecay = 0;
   specopts.binscale = 0;
   specopts.randbins = 0;
@@ -821,6 +902,7 @@ int main(int argc, char *argv[]) {
   specopts.obsrangemax = RANGEMAX;
   specopts.distributor = NULL;
   specopts.compress = 0;
+  specopts.componentcount = 1;
 
 #ifdef CLIENT_ONLY
   if ( argc != 3 ) {
@@ -884,11 +966,11 @@ int main(int argc, char *argv[]) {
   }
 #else /* not CLIENT_ONLY */
   GA_getopt(argc,argv, &settings, my_optstring, my_long_options, my_parseopt,
-	    gaspectroscopy_usage, &optlog);
+            gaspectroscopy_usage, &optlog);
 
   /* Check segment ranges */
-  for ( i = 0; i < SEGMENTS; i++ ) {
-    if ( specopts.userange[i]+specopts.rangetemp[i] == 1 ) {
+  for ( i = 0; i < specopts.rangesize*SEGMENTS; i++ ) {
+    if ( specopts.userange[i] != specopts.rangetemp[i] ) {
       /* Must specify both */
       printf("Cannot specify only one of minimum and maximum range.\n");
       exit(1);
@@ -959,10 +1041,11 @@ int main(int argc, char *argv[]) {
 #endif /* not CLIENT_ONLY */
 
   /* Initialize error */
-  for ( i = 0; i < SEGMENTS; i++ ) {
+  for ( i = 0; i < specopts.rangesize*SEGMENTS; i++ ) {
     if ( specopts.userange[i] )
       specopts.initialerror[i] = (specopts.rangemax[i]-specopts.rangemin[i])/4;
   }
+  realloc_specopts_range(&specopts, specopts.componentcount);
 
   /* Initialize observation storage */
   specopts.observation = NULL;
@@ -976,26 +1059,26 @@ int main(int argc, char *argv[]) {
   if ( specopts.basename_out == NULL ) specopts.basename_out = ".";
   {
     DIR *x = opendir(specopts.basename_out);
-    if ( x != NULL ) {		/* Given a directory */
+    if ( x != NULL ) {          /* Given a directory */
       char *dir = specopts.basename_out;
       unsigned len = strlen(dir)+32;
       specopts.basename_out = malloc(len);
       if ( !specopts.basename_out ) {
-	printf("basename malloc failed\n");
-	exit(1);
+        printf("basename malloc failed\n");
+        exit(1);
       }
       if ( snprintf(specopts.basename_out, len, "%s/tmp-gaspec-%d",
                     dir, getpid()) >= len ) {
-	printf("basename overflow\n");
-	exit(1);
+        printf("basename overflow\n");
+        exit(1);
       }
     }
     else {
       /* Requires dynamically allocated string */
       specopts.basename_out = strdup(specopts.basename_out);
       if ( !specopts.basename_out ) {
-	printf("Out of memory (basename dup)\n");
-	exit(1);
+        printf("Out of memory (basename dup)\n");
+        exit(1);
       }
     }
   }
@@ -1089,7 +1172,7 @@ int main(int argc, char *argv[]) {
   qprintf(&settings, "Using output file %s\n", specopts.basename_out);
 
   /* Load SPCAT .int & .var input template files */
-  lprintf(&settings, "Loading template files %s.{var,int}\n", specopts.template_fn); 
+  lprintf(&settings, "Loading template files %s.{var,int}\n", specopts.template_fn);
   if ( (rc = load_spec_templates(&specopts)) != 0 ) {
     qprintf(&settings, "load_spec_templates failed: %d\n", rc);
     return rc;
@@ -1105,7 +1188,8 @@ int main(int argc, char *argv[]) {
   if ( specopts.popfile ) {
     lprintf(&settings, "Loading inital population %s\n", specopts.popfile);
     /* TODO cleanup */
-    specopts.popdata = malloc(sizeof(GA_segment)*SEGMENTS*settings.popsize);
+    specopts.popdata = malloc(sizeof(GA_segment)*specopts.componentcount*
+                                                 SEGMENTS*settings.popsize);
     if ( !specopts.popdata ) {
       qprintf(&settings, "load popdata failed\n");
       return 1;
@@ -1116,8 +1200,9 @@ int main(int argc, char *argv[]) {
     while ( idx < settings.popsize ) {
       int rc = fscanf(fh, "%*d %*d GD");
       if ( rc == 0 ) {
-        for ( i = 0; i < SEGMENTS; i++ ) {
-          rc = fscanf(fh, "%u", &specopts.popdata[idx*SEGMENTS+i]);
+        for ( i = 0; i < specopts.componentcount*SEGMENTS; i++ ) {
+          rc = fscanf(fh, "%u", &specopts.popdata[idx*specopts.componentcount*
+                                                  SEGMENTS+i]);
           if ( rc != 1 ) break;
         }
       } else rc = 0; /* Pretend to be an error from the inner loop */
@@ -1132,7 +1217,9 @@ int main(int argc, char *argv[]) {
      * SEGMENT count-independent form (FIXME) */
     /*
     for ( idx=0;idx<settings.popsize;idx++ ) {
-      printf("0000 %04u GD %10u %10u %10u\n", idx, specopts.popdata[idx*SEGMENTS], specopts.popdata[idx*SEGMENTS+1],specopts.popdata[idx*SEGMENTS+2]);
+      printf("0000 %04u GD %10u %10u %10u\n", idx,
+             specopts.popdata[idx*SEGMENTS], specopts.popdata[idx*SEGMENTS+1],
+             specopts.popdata[idx*SEGMENTS+2]);
     }*/
   }
 #endif
@@ -1191,6 +1278,12 @@ int main(int argc, char *argv[]) {
 
   lprintf(&settings, "Using %d bins\n", specopts.bins);
 
+  /* Check that number of components matches number of ranges provided. */
+  if ( specopts.componentcount < specopts.rangesize )
+    qprintf(&settings,
+            "Warning: ranges provided for %d components, but only fitting %d.\n",
+            specopts.rangesize, specopts.componentcount);
+
 #ifdef CLIENT_ONLY
   /* Do something */
   {
@@ -1232,9 +1325,10 @@ int main(int argc, char *argv[]) {
       /* Prepare individual structure */
       memset(&(pop[pos]), 0, sizeof(struct GAC_individual));
       pop[pos].index = index;
-      pop[pos].indiv.gdsegments = malloc(sizeof(GA_segment)*SEGMENTS);
+      pop[pos].indiv.gdsegments = malloc(sizeof(GA_segment)*
+                                         specopts.componentcount*SEGMENTS);
       /* Load segments */
-      for ( i = 0; i < SEGMENTS; i++ ) {
+      for ( i = 0; i < specopts.componentcount*SEGMENTS; i++ ) {
         subline += offset;
         rc = sscanf(subline, "%x%n", &(pop[pos].indiv.gdsegments[i]), &offset);
         if ( rc < 1 ) {
@@ -1300,12 +1394,13 @@ int main(int argc, char *argv[]) {
   {
     GA_session ga;
     /* Run the genetic algorithm */
-    if ( (rc = GA_init(&ga, &settings, SEGMENTS)) != 0 ) {
+    rc = GA_init(&ga, &settings, specopts.componentcount*SEGMENTS);
+    if ( rc != 0 ) {
       qprintf(&settings, "GA_init failed: %d\n", rc);
       return rc;
     }
 
-#if 0	       /* Debugging mode: enumeration of all values */
+#if 0          /* Debugging mode: enumeration of all values */
     {
       if ( SEGMENTS != 1 || settings.threadcount != 1 ) {
         qprintf(&settings, "Settings error\n");
@@ -1320,8 +1415,8 @@ int main(int argc, char *argv[]) {
         x->segments[0] = grayencode(i);
         rc = GA_fitness(&ga, ga.threads[0].ref, x);
         if ( rc != 0 ) {
-	  qprintf(&settings, "fitness error, %d\n", rc);
-	  exit(1);
+          qprintf(&settings, "fitness error, %d\n", rc);
+          exit(1);
         }
         printf("ENUM %u %f\n", i, x->fitness);
       } while ( x->segments[0] <= 0xFFFFFFFF); //2107767296 );
@@ -1337,7 +1432,7 @@ int main(int argc, char *argv[]) {
     /* Compute runtime */
     starttime = time(NULL)-starttime;
     qprintf(&settings, "Finished.\nTook %u seconds (%f sec/gen)\n",
-	    starttime, starttime/(settings.generations+1.0));
+            starttime, starttime/(settings.generations+1.0));
 
     /* Cleanup */
     if ( (rc = GA_cleanup(&ga)) != 0 ) {
@@ -1368,7 +1463,7 @@ GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
   */
   if ( opts->popfile ) {
     // Note that the random state will be completely different.
-    r = grayencode(opts->popdata[i*SEGMENTS+j]);
+    r = grayencode(opts->popdata[i*opts->componentcount*SEGMENTS+j]);
   }
   else if ( opts->userange[j] ) {
     unsigned int realr;
@@ -1376,7 +1471,8 @@ GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
                        /RAND_MAX)+opts->rangemin[j];
     //printf("%d\n", realr);
     r = grayencode(realr);
-    //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr, opts->rangemax[j]);
+    //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr,
+    //                              opts->rangemax[j]);
   }
   return r;
 }
@@ -1398,16 +1494,17 @@ int GA_finished_generation(const GA_session *ga, int terminating) {
     GA_segment *x = ga->population[p].gdsegments;
     int j = 0;
     fprintf(fh, "%04u %04u GD", ga->generation, p);
-    for ( j = 0; j < SEGMENTS; j++ )
+    for ( j = 0; j < ga->population[p].segmentcount; j++ )
       fprintf(fh, "  %10u", x[j]);
     fprintf(fh, "\n");
     if ( p == ga->fittest ) {
       /* Generate SPCAT input file */
-      rc = generate_input_files(opts, ga->generation, opts->basename_out, x);
-      if ( rc != 0 ) {
+      rc = generate_input_files(opts, ga->generation, opts->basename_out, x,
+                                0 /* Assume one subfile */);
+      if ( rc < 0 ) {
         qprintf(ga->settings,
                 "finished_generation generate_input_files failed: %d\n", rc);
-        return rc;
+        return -rc;
       }
     }
   }
@@ -1429,26 +1526,22 @@ int GA_fitness_quick(const GA_session *ga, GA_individual *elem) {
 
   /* Check basic constraints: A >= B >= C.
    * i.e. Fail if A < B or B < C. */
-  {
-    GA_segment b = x[1];
-    GA_segment c = x[2];
+  for ( i = 0; i < elem->segmentcount; i += SEGMENTS ) {
+    GA_segment b = x[i+1];
+    GA_segment c = x[i+2];
     /* Convert B+C and B-C to B and C */
-    if ( opts->linkbc ) { b = (x[1]+x[2])/2; c = (x[1]-x[2])/2; }
-    if ( x[0] < b || b < c || c <= 0 )
+    if ( opts->linkbc ) { b = (x[i+1]+x[i+2])/2; c = (x[i+1]-x[i+2])/2; }
+    if ( x[i+0] < b || b < c || c <= 0 )
       return 0;
     //printf("ABC %d >= %d >= %d\n", x[0], b, c);
   }
-  /*
-  GA_segment ideal[] = {2094967296, 1600000000, 100000000};
-  GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
-  */
-  for ( i = 0; i < SEGMENTS; i++ ) {
+
+  for ( i = 0; i < elem->segmentcount; i++ ) {
+    //int j = i%SEGMENTS;
     if ( opts->userange[i] &&
          ( (x[i] < opts->rangemin[i]) || (x[i] > opts->rangemax[i]) ) ) {
-      /*
-      printf("Rejecting segment %03d %010u < %010u < %010u\n", i,
-             opts->rangemin[i],x[i],opts->rangemax[i]);
-      */
+      /* printf("Rejecting segment %03d %010u < %010u < %010u\n", i,
+                opts->rangemin[i],x[i],opts->rangemax[i]); */
       return 0;
     }
   }
@@ -1491,7 +1584,7 @@ int bin_comparator(const void *a, const void *b) {
   sortable_bin x = *(sortable_bin *)a, y = *(sortable_bin *)b;
   if ( x.total < y.total ) return 1;
   else if ( x.total > y.total ) return -1;
-  else return 0; /* x-y; */	/* If equal sort by index to preserve order */
+  else return 0; /* x-y; */     /* If equal sort by index to preserve order */
 }
 
 
@@ -1499,7 +1592,7 @@ int peak_error_comparator(const void *a, const void *b) {
   datarow *x = (datarow *)a, *y = (datarow *)b;
   if ( x->error < y->error ) return -1;
   else if ( x->error > y->error ) return 1;
-  else return 0; /* x-y; */	/* If equal sort by index to preserve order */
+  else return 0; /* x-y; */     /* If equal sort by index to preserve order */
 }
 
 int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
@@ -1525,113 +1618,121 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   char filename[256];
 #endif
 
+  rc = 0;
+  thrs->compdatacount = 0;
+  while ( 1 ) {
 #ifdef USE_SPCAT_OBJ
-  /* Generate SPCAT input buffer */
-  rc = generate_input_buffers(opts, buffers, bufsizes, x);
-  if ( rc != 0 ) return rc;
-  if ( init_spcs(&spcs) ) return 11;
-  if ( spcat(&spcs, buffers, bufsizes) ) return 12;
-  if ( free_spcs(&spcs) ) return 13;
-  free(buffers[0]); free(buffers[1]);
-  /* Read SPCAT output buffer */
-  if ( !bufsizes[ecat] ) fh = NULL;
-  else if ( ( fh = fmemopen(buffers[ecat], bufsizes[ecat], "r") ) == NULL ) {
-    qprintf(ga->settings, "Failed to open file, errno=%d\n", errno);
-    return 15;
-  }
-  /******** FIXME TODO NEED TO SORT ********/
+#error SPCAT_OBJ unsupported
+    /* Generate SPCAT input buffer */
+    rc = generate_input_buffers(opts, buffers, bufsizes, x);
+    if ( rc != 0 ) return rc;
+    if ( init_spcs(&spcs) ) return 11;
+    if ( spcat(&spcs, buffers, bufsizes) ) return 12;
+    if ( free_spcs(&spcs) ) return 13;
+    free(buffers[0]); free(buffers[1]);
+    /* Read SPCAT output buffer */
+    if ( !bufsizes[ecat] ) fh = NULL;
+    else if ( ( fh = fmemopen(buffers[ecat], bufsizes[ecat], "r") ) == NULL ) {
+      qprintf(ga->settings, "Failed to open file: %s\n", strerror(errno));
+      return 15;
+    }
+    /******** FIXME TODO NEED TO SORT ********/
 #else
-  /* Generate SPCAT input file */
-  rc = generate_input_files(opts, ga->generation, thrs->basename_temp, x);
-  if ( rc != 0 ) return rc;
+    /* Generate SPCAT input file */
+    rc = generate_input_files(opts, ga->generation, thrs->basename_temp, x,
+                              rc);
+    if ( rc < 0 ) return -rc;
 
-  /* Run SPCAT. Append a '.' to the end of the filename so that it
-   * doesn't choke on filenames with '.' in them (like ./foo).
-   */
+    /* Run SPCAT. Append a '.' to the end of the filename so that it
+     * doesn't choke on filenames with '.' in them (like ./foo).
+     */
 
-  /* This way we can avoid running /bin/sh for every fitness
-   * evaluation. This doesn't quite work as expected -- ^C often
-   * fails if we use the recommended signal handling code. */
-  //tprintf("Running %s %s\n", opts->spcatbin, filename);
+    /* This way we can avoid running /bin/sh for every fitness
+     * evaluation. This doesn't quite work as expected -- ^C often
+     * fails if we use the recommended signal handling code. */
+    //tprintf("Running %s %s\n", opts->spcatbin, filename);
 
 #ifdef _WIN32
-  snprintf(filename, sizeof(filename), "\"%s\" \"%s.\"",
-           opts->spcatbin, thrs->basename_temp);
-  {
-    STARTUPINFO si;
-    PROCESS_INFORMATION pi;
-    DWORD exitCode;
+    snprintf(filename, sizeof(filename), "\"%s\" \"%s.\"",
+             opts->spcatbin, thrs->basename_temp);
+    {
+      STARTUPINFO si;
+      PROCESS_INFORMATION pi;
+      DWORD exitCode;
 
-    ZeroMemory(&si, sizeof(si));
-    ZeroMemory(&pi, sizeof(pi));
-    si.cb = sizeof(si);
-    //printf("[%s] %s\n", opts->spcatbin, filename);
-    i = CreateProcess(opts->spcatbin, filename, NULL, NULL, FALSE,
-                      DETACHED_PROCESS /* invisible */, NULL, NULL, &si, &pi);
-    if ( i == 0 ) {
-      printf("CreateProcess: [%s] %s: failed, GetLastError=%d\n",
-             opts->spcatbin, filename, GetLastError());
+      ZeroMemory(&si, sizeof(si));
+      ZeroMemory(&pi, sizeof(pi));
+      si.cb = sizeof(si);
+      //printf("[%s] %s\n", opts->spcatbin, filename);
+      i = CreateProcess(opts->spcatbin, filename, NULL, NULL, FALSE,
+                        DETACHED_PROCESS /* invisible */, NULL, NULL, &si, &pi);
+      if ( i == 0 ) {
+        printf("CreateProcess: [%s] %s: failed, GetLastError=%d\n",
+               opts->spcatbin, filename, GetLastError());
+        return 11;
+      }
+      /* Wait until child process exits. */
+      i = WaitForSingleObject(pi.hProcess, INFINITE);
+      if ( i != WAIT_OBJECT_0 ) {
+        printf("WaitForSingleObject [%s] %s: returned %d, GetLastError=%d\n",
+               opts->spcatbin, filename, i, GetLastError());
+        return 11;
+      }
+      i = GetExitCodeProcess(pi.hProcess, &exitCode);
+      if ( i == 0 ) {
+        printf("GetExitCodeProcess [%s] %s: failed, GetLastError=%d\n",
+               opts->spcatbin, filename, GetLastError());
+        return 11;
+      }
+      if ( exitCode != 0 ) {
+        printf("SPCAT returned nonzero: [%s] %s: Exit code %d\n",
+               opts->spcatbin, filename, exitCode);
+        return 10;
+      }
+      /* Close process and thread handles. */
+      CloseHandle(pi.hProcess);
+      CloseHandle(pi.hThread);
+    }
+#else
+    snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
+    i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
+    if ( i != 0 ) {
+      qprintf(ga->settings, "Failed to start spcat (--spcat to specify path)\n");
       return 11;
     }
-    /* Wait until child process exits. */
-    i = WaitForSingleObject(pi.hProcess, INFINITE);
-    if ( i != WAIT_OBJECT_0 ) {
-      printf("WaitForSingleObject [%s] %s: returned %d, GetLastError=%d\n",
-             opts->spcatbin, filename, i, GetLastError());
-      return 11;
-    }
-    i = GetExitCodeProcess(pi.hProcess, &exitCode);
-    if ( i == 0 ) {
-      printf("GetExitCodeProcess [%s] %s: failed, GetLastError=%d\n",
-             opts->spcatbin, filename, GetLastError());
-      return 11;
-    }
-    if ( exitCode != 0 ) {
-      printf("SPCAT returned nonzero: [%s] %s: Exit code %d\n",
-             opts->spcatbin, filename, exitCode);
+    if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) ) {
+      qprintf(ga->settings, "spcat did not return success\n");
       return 10;
     }
-    /* Close process and thread handles. */
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-  }
-#else
-  snprintf(filename, sizeof(filename), "%s.", thrs->basename_temp);
-  i = invisible_system(opts->devnullfd, 2, opts->spcatbin, filename);
-  if ( i != 0 ) {
-    qprintf(ga->settings, "Failed to start spcat (--spcat to specify path)\n");
-    return 11;
-  }
-  if ( !WIFEXITED(i) || ( WEXITSTATUS(i) != 0 ) ) {
-    qprintf(ga->settings, "spcat did not return success\n");
-    return 10;
-  }
 #endif
 
-  /* Read SPCAT output file */
-  snprintf(filename, sizeof(filename), "%s.cat", thrs->basename_temp);
-  if ( ( fh = fopen(filename, "r") ) == NULL ) {
-    qprintf(ga->settings, "Failed to open cat file, errno=%d\n", errno);
-    return 15;
-  }
+    /* Read SPCAT output file */
+    snprintf(filename, sizeof(filename), "%s.cat", thrs->basename_temp);
+    if ( ( fh = fopen(filename, "r") ) == NULL ) {
+      qprintf(ga->settings, "Failed to open cat file: %s\n", strerror(errno));
+      return 15;
+    }
 #endif
 
-  thrs->compdatacount = 0;
-  rc = load_catfile(fh, &(thrs->compdata), &(thrs->compdatasize),
-                  &(thrs->compdatacount));
-  if ( rc > 0 ) return 20+rc;
-  fclose(fh);
+    i = load_catfile(fh, &(thrs->compdata), &(thrs->compdatasize),
+                    &(thrs->compdatacount));
+    if ( i > 0 ) return 20+i;
+    fclose(fh);
+
+    /* Is there another subfile we need to process? */
+    if ( rc == 0 ) break;
+  }
 
   /* Determine fitness */
   //tprintf("COUNTS: %d %d\n", opts->observationcount, thrs->compdatacount);
   fitness = 0;
 
   /* Check double resonance */
-  
+
   /* BUG -- Need to check against *either* of the dblreses of first item
    * -- they don't need to to all be the same. */
   /* Isn't that fixed ? */
-  
+
   int drfail = 0;
   for ( i = 0; i < opts->doublereslen; i++ ) { /* For each resonance */
     int drlen = 0; /* Reset the QN list */
@@ -1649,7 +1750,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
         /* For each quantum number associated with the peak */
         for ( m = 0; m < QN_COUNT; m++ ) {
           int found = 0;
-          //printf("Looking for QN %d %d %d\n", thrs->compdata[k].qn[m*QN_DIGITS], thrs->compdata[k].qn[m*QN_DIGITS+1], thrs->compdata[k].qn[m*QN_DIGITS+2]);
+          //printf("Looking for QN %d %d %d\n",thrs->compdata[k].qn[m*QN_DIGITS],
+          //thrs->compdata[k].qn[m*QN_DIGITS+1],thrs->compdata[k].qn[m*QN_DIGITS+2]);
           /* Check all previously seen quantum numbers */
           for ( l = 0; l < drlen; l++ ) {
             int n = 0;
@@ -1660,7 +1762,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
                           sizeof(int)*QN_DIGITS) == 0 ) {
                 /* We found the QN, skip it unless it was also found last time */
                 if ( thrs->drlist[l].seen >= j ) {
-                  //printf("  Match QN %d %d %d\n", drlist[l].qn[n*QN_DIGITS], drlist[l].qn[n*QN_DIGITS+1], drlist[l].qn[n*QN_DIGITS+2]);
+                  //printf("  Match QN %d %d %d\n", drlist[l].qn[n*QN_DIGITS],
+                  //  drlist[l].qn[n*QN_DIGITS+1], drlist[l].qn[n*QN_DIGITS+2]);
                   thrs->drlist[l].seen = j+1;
                   found = 1;
                   /* break; */
@@ -1685,14 +1788,16 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
               thrs->drlist = realloc(thrs->drlist,
                                      sizeof(dblres_check)*thrs->drsize);
               if ( thrs->drlist == NULL ) {
-	        qprintf(ga->settings, "Out of memory, errno=%d\n", errno);
-	        return 35;
+                qprintf(ga->settings, "Out of memory: %s\n", strerror(errno));
+                return 35;
               }
             }
             thrs->drlist[drlen].seen = 1;
             memcpy(thrs->drlist[drlen].qn, thrs->compdata[k].qn,
                    sizeof(thrs->drlist[drlen].qn));
-            //printf("  Added QN %d %d %d %d %d %d\n", drlist[drlen].qn[0], drlist[drlen].qn[1], drlist[drlen].qn[2], drlist[drlen].qn[3], drlist[drlen].qn[4], drlist[drlen].qn[5]);
+            //printf("  Added QN %d %d %d %d %d %d\n", drlist[drlen].qn[0],
+            //    drlist[drlen].qn[1], drlist[drlen].qn[2], drlist[drlen].qn[3],
+            //    drlist[drlen].qn[4], drlist[drlen].qn[5]);
             drlen++;
             drfail = 0;
           }
@@ -1719,7 +1824,8 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   float errtol = binsize*10;
   {
     /* Find the 25 most precise peaks */
-    qsort(thrs->compdata, thrs->compdatacount, sizeof(datarow), peak_error_comparator);
+    qsort(thrs->compdata, thrs->compdatacount, sizeof(datarow),
+          peak_error_comparator);
     for ( j = 0; j < thrs->compdatacount; j++ ) {
       datarow *entry = &thrs->compdata[j];
       if ( ( entry->frequency < opts->obsrangemin ) ||
@@ -1735,7 +1841,7 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
   }
 
   //double obsmax=0/*, obsmin = 0*/;
-  for ( j=0;j<=1;j++ ) {	/* 0=Observed / 1=Generated */
+  for ( j=0;j<=1;j++ ) {        /* 0=Observed / 1=Generated */
     for ( i=0; i<((j==0)?opts->observationcount:thrs->compdatacount); i++ ) {
       datarow *entry;
       if ( j == 0 ) entry = &opts->observation[i]; /* Observed */
@@ -1796,10 +1902,10 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
    */
   for ( yi=0; yi<compdatacount; yi++ ) {
     float compa = sqrtf(powf(fabs(observation[xi].a-compdata[yi].a),2) +
-			powf(fabs(observation[xi].b-compdata[yi].b),2));
+                        powf(fabs(observation[xi].b-compdata[yi].b),2));
     while ( xi+1 < observationcount ) {
       float compb = sqrtf(powf(fabs(observation[xi+1].a-compdata[yi].a),2) +
-			  powf(fabs(observation[xi+1].b-compdata[yi].b),2));
+                          powf(fabs(observation[xi+1].b-compdata[yi].b),2));
       if ( compb < compa ) { xi++; compa = compb; }
       else break;
     }
@@ -1830,10 +1936,11 @@ int GA_thread_init(GA_thread *thread) {
 
 #ifndef USE_SPCAT_OBJ
   /* Use separate temporary files for each thread. */
-  opts->basename_temp = make_spec_temp(((specopts_t *)(thread->session->settings->ref))->tempdir);
+  opts->basename_temp = make_spec_temp
+    (((specopts_t *)(thread->session->settings->ref))->tempdir);
   if ( opts->basename_temp == NULL ) return 1;
   qprintf(thread->session->settings, "Using temporary file %s\n",
-	  opts->basename_temp);
+          opts->basename_temp);
 #endif
 
   thread->ref = (void *)opts;
@@ -1851,15 +1958,15 @@ int GA_thread_free(GA_thread *thread) {
     for ( i = 0; i < 2; i++ ) {
       int j;
       for ( j = 0; j < 2; j++ ) {
-	sprintf(filename, "%s.%s", thrs->basename_temp,
-		j == 0 ? input_suffixes[i] : output_suffixes[i]);
-	unlink(filename);
+        sprintf(filename, "%s.%s", thrs->basename_temp,
+                j == 0 ? input_suffixes[i] : output_suffixes[i]);
+        unlink(filename);
       }
     }
     free(filename);
   }
   else qprintf(thread->session->settings,
-	       "Could not delete temporary files: Out of memory\n");
+               "Could not delete temporary files: Out of memory\n");
   free(thrs->basename_temp);
 #endif
 
@@ -1950,19 +2057,20 @@ int invisible_system(int stdoutfd, int argc, ...) {
   free(argv);
 
   if (pid == -1) {
-    printf("invisible_system: fork failed, errno=%d\n", errno);
+    printf("invisible_system: fork failed: %s\n", strerror(errno));
     stat = -1; /* errno comes from fork() */
   } else {
     while (waitpid(pid, &stat, 0) == -1) {
       if (errno != EINTR){
-	stat = -1;
-	printf("invisible_system: waitpid fail, errno=%d\n", errno);
-	break;
+        stat = -1;
+        printf("invisible_system: waitpid fail: %s\n", strerror(errno));
+        break;
       }
     }
   }
   //gettimeofday(&endtime, NULL);
-  //printf("System took %f seconds.\n", timeval_diff(NULL, &endtime, &starttime)/1000000.0);
+  //printf("System took %f seconds.\n",
+  //       timeval_diff(NULL, &endtime, &starttime)/1000000.0);
   /*
   sigaction(SIGINT, &savintr, (struct sigaction *)0);
   sigaction(SIGQUIT, &savequit, (struct sigaction *)0);
