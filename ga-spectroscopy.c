@@ -716,81 +716,113 @@ int main(int argc, char *argv[]) {
     /** --amin NUMBER
      *
      * Minimum A value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"amin",       required_argument, 0, 20},
     /** --amax NUMBER
      *
      * Maximum A value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"amax",       required_argument, 0, 21},
     /** --bmin NUMBER
      *
      * Minimum B value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"bmin",       required_argument, 0, 22},
     /** --bmax NUMBER
      *
      * Maximum B value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"bmax",       required_argument, 0, 23},
     /** --cmin NUMBER
      *
      * Minimum C value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"cmin",       required_argument, 0, 24},
     /** --cmax NUMBER
      *
      * Maximum C value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"cmax",       required_argument, 0, 25},
     /** --djmin NUMBER
      *
      * Minimum DJ value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"djmin",      required_argument, 0, 26},
     /** --djmax NUMBER
      *
      * Maximum DJ value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"djmax",      required_argument, 0, 27},
     /** --djkmin NUMBER
      *
      * Minimum DJK value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"djkmin",     required_argument, 0, 28},
     /** --djkmax NUMBER
      *
      * Maximum DJK value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"djkmax",     required_argument, 0, 29},
     /** --dkmin NUMBER
      *
      * Minimum DK value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"dkmin",      required_argument, 0, 30},
     /** --dkmax NUMBER
      *
      * Maximum DK value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"dkmax",      required_argument, 0, 31},
     /** --deljmin NUMBER
      *
      * Minimum delJ value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"deljmin",    required_argument, 0, 32},
     /** --deljmax NUMBER
      *
      * Maximum delJ value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"deljmax",    required_argument, 0, 33},
     /** --delkmin NUMBER
      *
      * Minimum delK value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"delkmin",    required_argument, 0, 34},
     /** --delkmax NUMBER
      *
      * Maximum delK value (in units compatible with template file).
+     * May be specified multiple times; once for each component being
+     * fit (see --components).
      */
     {"delkmax",    required_argument, 0, 35},
     /** --rangemin NUMBER
