@@ -31,8 +31,9 @@ if ( $templatebasename ) {
     }
 }
 
-die "Usage: $0 <BEST|ITEM> <templatebasename> <files>\n"
-    unless $kind and $templatebasename and @ARGV;
+die <<EOF unless $kind and $templatebasename and @ARGV;
+Usage: extract-individuals.pl <BEST|ITEM> <templatebasename> <files>
+EOF
 
 foreach my $fn ( @ARGV ) {
     my $logfn = convert_filename($fn, '.log.');

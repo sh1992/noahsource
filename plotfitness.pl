@@ -15,16 +15,30 @@ use strict;
 my $format = 'png';
 my $output = undef;
 my $mytitle = undef;
+my $xlabel = 1;
+my $yrange = '*:*';
+my $size = '';
 (GetOptions('format=s' => \$format, 'output=s' => \$output,
-            'title=s' => \$mytitle) and @ARGV)
+            'title=s' => \$mytitle, 'xlabel!' => \$xlabel,
+            'yrange=s' => \$yrange,
+            'size=s' => \$size) and @ARGV)
     or die <<EOF;
-Usage: $0 [--format={png|latex}] [--output=<basename>] [--title=<title>]
-          <file> [...]\n"
+Usage: plotfitness.pl [--format={png|latex}] [--output=<basename>]
+        [--yrange=<range>] [--title=<title>] [--[no-]xlabel] [--size=<size>]
+        <file> [...]
 EOF
 
 my ($term, $outsuffix);
-if ( $format eq 'png' ) { $term = 'png size 1200,480'; $outsuffix = '.png' }
-elsif ( $format eq 'latex' ) { $term = 'epslatex size 6in,3.99in dl 2'; $outsuffix = '.tex' }
+if ( $format eq 'png' ) {
+    $size ||= '1200,480';
+    $term = "png size $size";
+    $outsuffix = '.png';
+}
+elsif ( $format eq 'latex' ) {
+    $size ||= '6in,3.99in';
+    $term = "epslatex size $size dl 2";
+    $outsuffix = '.tex';
+}
 else { die "Undefined format: $format\n" }
 
 foreach my $fn ( @ARGV ) {
@@ -96,9 +110,9 @@ set term $term
 set output "$outfn"
 
 #set yrange [-45:$ytop]
-set ylabel "Fitness (0 is best)"
+set ylabel "Fitness (arbitrary units)"
 set logscale y
-set yrange [:] reverse
+set yrange [$yrange] reverse
 set format y "-%g"
 
 set xrange [0:*]
@@ -109,9 +123,14 @@ END
 set lmargin at screen .14
 set rmargin at screen .96
 END
-    print G "set title \"$title\"\n" if $title;
+    if ( $title ) {
+        print G "set title \"$title\"\n" if $format ne 'latex';
+        print G "set label \"$title\" at screen .945, screen .89 right\n"
+            if $format eq 'latex';
+    }
     print G 'set xlabel "Generation',
-        ($sectot&&$secgen)?" (Took $sectot sec, $secgen sec/gen)":'',"\"\n";
+        ($sectot&&$secgen)?" (Took $sectot sec, $secgen sec/gen)":'',"\"\n"
+        if $xlabel;
     if ( $hasdynmut ) {
         print G "set rmargin at screen .9\n" if $format eq 'latex';
         print G <<END;
@@ -132,7 +151,8 @@ END
     print G "\n";
     close G;
 
-    system 'gnuplot', $gpfn;
+    system('gnuplot', $gpfn) == 0 or die "gnuplot failed";
     (my $epsfn = $outfn) =~ s/\.tex$/.eps/;
-    system('epstopdf', $epsfn) if $format eq 'latex'; # Support pdfLaTeX
+    system('epstopdf', $epsfn) == 0 or die "epstopdf failed"
+        if $format eq 'latex'; # Support pdfLaTeX
 }
