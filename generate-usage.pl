@@ -13,14 +13,14 @@ foreach my $f ( @ARGV) {
     open F, '<', $f;
     my $x = join('',<F>);
     close F;
-    $x =~ s/\r//g;				# Remove DOS line endings
+    $x =~ s/\r//g;                              # Remove DOS line endings
     foreach ( $x =~ m/(\/\*\*\s*-.+?\*\/)/gs ) {
-	s/^\/\*//; s/\s*\*\/$//;
-	s/^\s*\*[^\S\n]*//gm;
-	s/^([^\n]+)\s+//g;
-	$m = "\n$1\n$_\n";
-	$m =~ s/\n/\\n/g; $m =~ s/"/\\"/g;
-	print O $m;
+        s/^\/\*//; s/\s*\*\/$//;
+        s/^\s*\*[^\S\n]*//gm;
+        s/^([^\n]+)\s+//g;
+        $m = "\n$1\n$_\n";
+        $m =~ s/\n/\\n/g; $m =~ s/"/\\"/g;
+        print O $m;
     }
     print O "\";\n";
 }

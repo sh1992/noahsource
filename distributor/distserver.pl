@@ -57,6 +57,7 @@ my $lastworkerdump = time-int($DUMPINTERVAL/4);
 my $freeworkersince = 0;    # How long there's been an available thread
 my $lastbroadcast = 0;
 my $lastagressive = 0;      # Last time an agressive cancelation was performed
+my $goaway_message = 'Distributed Computing Client upgrade required.';
 
 print "distserver ready\n";
 while ( 1 ) {
@@ -193,7 +194,7 @@ while ( 1 ) {
                         }
                     }
                     NotifyMonitors('CREATE', 'WORKUNIT', $obj->{id});
-                    #NotifyMonitors('UPDATE', 'WORKER', $workerid); # Client can figure out
+                    # Monitor does not need UPDATE WORKER message also.
                 }
                 else { print $sock "ERR Invalid command\n" }
             }
@@ -305,7 +306,7 @@ while ( 1 ) {
                               threads => 0, assigned => 0, seen => time,
                               seenwork => 0, jailed => 0, ver => $sockver };
                         if ( $sockver < $MINCLIENT ) {
-                            print $sock "GOAWAY Distributed Computing Client upgrade required.\n";
+                            print $sock "GOAWAY $goaway_message\n";
                             print "Client $name has version $sockver; too old!\n";
                             $workers{$ident}{jailed} = 1;
                         }
@@ -382,7 +383,8 @@ while ( 1 ) {
 sub DeleteWorkunit {
     my ($id, $status, $json) = @_;
     my $dispatcher = $workunits{$id}{source};
-    my $dispatchsock = exists($clients{$dispatcher}) ? $clients{$dispatcher}{sock} : undef;
+    my $dispatchsock = exists($clients{$dispatcher}) ?
+        $clients{$dispatcher}{sock} : undef;
     if ( $dispatchsock ) {
         print $dispatchsock "WORK$status $json\n";
     }
@@ -458,7 +460,9 @@ sub DumpWorkers {
     foreach my $id ( keys %workers ) {
         next unless exists($workers{$id}{name}) and defined($workers{$id}{name});
         next unless exists($workers{$id}{sock}) and defined($workers{$id}{sock});
-        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t$workers{$id}{seenwork}\t$workers{$id}{threads}\t$workers{$id}{ver}\n";
+        print WF "$id\t$workers{$id}{name}\t$workers{$id}{seen}\t",
+                 "$workers{$id}{seenwork}\t$workers{$id}{threads}\t",
+                 "$workers{$id}{ver}\n";
         if ( $comma ) { print WJ ',' } else { $comma = 1 }
         print WJ "\n    \"$id\": ",to_json($workers{$id});
         if ( $workers{$id}{seen}+300 < $now ) {

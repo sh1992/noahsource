@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 #
-# Makefile for project
+# Makefile for project. Requires GNU make.
 #
 
 # We use gsl (GNU Scientific Library) for random numbers.
@@ -10,7 +10,7 @@ GSL = `gsl-config --cflags --libs` -DHAVE_GSL
 # CFLAGS += -I/usr/local/include -L/usr/local/lib
 
 # Some systems have md5 instead of md5sum
-MD5SUM = '(md5sum || md5)'
+MD5SUM = (md5sum || md5)
 
 GAFLAGS = -lpthread $(GSL)
 override CFLAGS += -Wall -DDEBUG -lm -g -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
@@ -25,22 +25,24 @@ ga-numbers: $(DEPS) ga.usage.h ga.h
 SPECFLAGS = -DGA_segment=uint32_t -DGA_segment_size=32 -DTHREADS
 ga-spectroscopy: CFLAGS += $(GAFLAGS) $(SPECFLAGS)
 ga-spectroscopy: DEPS = ga.c
-ga-spectroscopy: $(DEPS) ga-spectroscopy.checksum.h ga.usage.h ga-spectroscopy.usage.h ga.h
+ga-spectroscopy: $(DEPS) ga.h
+ga-spectroscopy: ga-spectroscopy.checksum.h ga.usage.h ga-spectroscopy.usage.h
 # spcat.a
 
 # ga-spectroscopy-client (client-only binary)
 ga-spectroscopy-client: CFLAGS += $(SPECFLAGS) -DCLIENT_ONLY
-ga-spectroscopy-client: DEPS = 
+ga-spectroscopy-client: DEPS =
 .INTERMEDIATE: ga-spectroscopy-client.c
 ga-spectroscopy-client.c: ga-spectroscopy.c
-	$(SHELL) -c '(echo "#line 1" "\"$<\"";cat $<) > $@'
+	(echo "#line 1 \"$<\"";cat $<) > $@
 ga-spectroscopy-client: $(DEPS) ga-spectroscopy.checksum.h ga-clientonly.h
 
 # Checksum file
 %.checksum.h: %.c ga.c
-	$(SHELL) -c '(echo "char *CHECKSUM = \""`cat $^ | '$(MD5SUM)' | cut -c1-32`"\";") > $@'
+	(echo 'char *CHECKSUM = "'`cat $^ | $(MD5SUM) | cut -c1-32`'";') > $@
 %.usage.h: %.c
-	perl generate-usage.pl $^
+	if [ -e generate-usage.pl ]; then perl generate-usage.pl $^; else \
+	echo 'char*'$(subst -,,$*)'_usage="(see source)\\n";' > $*.usage.h; fi
 
 # Implicit rule for executables
 %: %.c

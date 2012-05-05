@@ -214,7 +214,7 @@ int GA_defaultsettings(GA_settings *settings);
  * if any fitness function failed.
  */
 int GA_init(GA_session *session, GA_settings *settings,
-	    unsigned int segmentcount);
+            unsigned int segmentcount);
 
 /** Free all allocated structures.
  *
@@ -317,7 +317,7 @@ extern int GA_thread_free(GA_thread *thread);
  */
 extern int GA_fitness_quick(const GA_session *ga, GA_individual *elem);
 
-/** Generate a random number 
+/** Generate a random number.
  *
  * \returns 0 for success, nonzero for error.
  */
@@ -387,7 +387,7 @@ unsigned int urandom();
  * \returns 0 for success.
  */
 typedef int (*GA_my_parseopt_t)(const struct option *long_options,
-				GA_settings *settings, int c, int option_index);
+                                GA_settings *settings, int c, int option_index);
 
 /** Parse command-line options using getopt_long.
  *
@@ -405,9 +405,9 @@ typedef int (*GA_my_parseopt_t)(const struct option *long_options,
  * \returns 0 for success, nonzero for failure.
  */
 int GA_getopt(int argc, char * const argv[], GA_settings *settings,
-	      const char *my_optstring, const struct option *my_long_options,
-	      GA_my_parseopt_t my_parse_option, const char *my_usage,
-	      char **optlog);
+              const char *my_optstring, const struct option *my_long_options,
+              GA_my_parseopt_t my_parse_option, const char *my_usage,
+              char **optlog);
 /* \} */
 
 /** Print a message both to the stdout and (unless in debug mode) the

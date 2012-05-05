@@ -17,15 +17,16 @@ use URI;
 use warnings;
 use strict;
 
-my ($DHOST, $DPORT) = ('localhost', 9933);  # Connect to distributor
+my ($DHOST, $DPORT) = ('localhost', 9933);  # Connect to server
 my ($LHOST, $LPORT) = ('localhost', 2222);  # Listen for ga-spectroscopy
 my ($WHOST, $WPORT) = ('localhost', 9990);  # HTTP host and port
 
-# Load HTTP server information from server.conf
+# Load some server information from server.conf
 open F, '<', 'server.conf' or die "Cannot load server.conf: $!";
 my $serverconf = from_json(join '', <F>);
 close F;
-$WHOST = $serverconf->{host} if $serverconf->{host};
+$WHOST = $serverconf->{host} if $serverconf->{host}; # HTTP hostname
+$DPORT = $serverconf->{port} if $serverconf->{port}; # Server port
 
 my $SPECDIR = '..';                         # CWD for ga-spectroscopy processes
 my $DATADIR = '../data';                    # Location of data directory
@@ -371,7 +372,8 @@ sub HandleSocket {
             # Remove existing configuration items and dependency files.
             # Note: By default, perlre's $ will ignore newlines at the end of
             #       the string.
-            if ( $socks{$id}{config} =~ s/(^|\n)CFG[A-Z0-9] $opt( ([^\n]*))?(\n|$)/$1/ &&
+            if ( $socks{$id}{config} =~
+                    s/(^|\n)CFG[A-Z0-9] $opt( ([^\n]*))?(\n|$)/$1/ &&
                  @suffixes && $3 ) {
                 # Remove obsolete dependency files
                 my (undef,undef,$oldfile) = File::Spec->splitpath($3);
@@ -399,7 +401,8 @@ sub HandleSocket {
                     my $wwwfn = MakeRelPath($realfn, $DATADIR);
                     my $checksum = md5($realfn);
                     if ( !$checksum or !-e $realfn ) {
-                        warn "Error checksumming $val=>$realfn or file does not exist (ID=$id config): $!";
+                        warn "Error checksumming $val=>$realfn or " .
+                                "file does not exist (ID=$id config): $!";
                         next;
                     }
                     if ( $wwwfn =~ m/^\.\./ ) {

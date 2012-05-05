@@ -605,7 +605,10 @@ sub WorkThread {
             { lock(@finishedwork); push @finishedwork, shared_clone($reply) }
         };
         #print "Finished\n";
-        #{ lock(@threadjobs); $threadjobs[$thread] = undef if $threadjobs[$thread] eq $id };
+        #{
+        #    lock(@threadjobs);
+        #    $threadjobs[$thread] = undef if $threadjobs[$thread] eq $id;
+        #};
     }
 }
 
@@ -790,7 +793,8 @@ sub UnpackApplication {
         # Verify directory components to ensure there are no forbidden
         # characters or words
         foreach ( @components ) {
-            if ( $_ =~ m/[\/\\?%*:|"<>\$\000-\037]|^(CON|PRN|AUX|NUL|COM\d+|LPT\d+)($|\.)|^\.\.|^\s*$/i ) {
+            if ( $_ =~ m/[\/\\?%*:|"<>\$\000-\037]|^\.\.|^\s*$|
+                         ^(CON|PRN|AUX|NUL|COM\d+|LPT\d+)($|\.)/ix ) {
                 die "Application archive contains invalid filename: $f";
             }
         }

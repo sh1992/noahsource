@@ -44,7 +44,8 @@ while ( 1 ) {
     #use JSON;
     #print to_json($status),"\n";
     my $str = "t".($status->{thread}||0)." is $status->{mode}";
-    $str .= sprintf(" (%03d)",$status->{progress}) if exists($status->{progress});
+    $str .= sprintf(" (%03d)",$status->{progress})
+        if exists($status->{progress});
     print length($str).":'$str'\n";
 }
 

@@ -56,7 +56,7 @@ int GA_defaultsettings(GA_settings *settings) {
 }
 
 int GA_init(GA_session *session, GA_settings *settings,
-	    unsigned int segmentcount) {
+            unsigned int segmentcount) {
   unsigned int i, j, rc;
   size_t segmentmallocsize = sizeof(GA_segment)*segmentcount;
 
@@ -69,12 +69,12 @@ int GA_init(GA_session *session, GA_settings *settings,
   if ( settings->elitism % 2 ) {
     settings->elitism--;
     qprintf(settings, "Elitism must be even, new value is %u\n",
-	    settings->elitism);
+            settings->elitism);
   }
   if ( settings->popsize % 2 ) {
     settings->popsize--;
     qprintf(settings, "Population size must be even, new value is %u\n",
-	    settings->popsize);
+            settings->popsize);
   }
 
   /* Zero out the GA_session object */
@@ -154,19 +154,19 @@ int GA_init(GA_session *session, GA_settings *settings,
   /* Initialize mutexes */
   rc = pthread_mutex_init(&(session->inmutex), NULL);
   if ( rc ) { qprintf(session->settings,
-		      "GA_init: mutex_init(in): %d\n", rc); exit(1); }
+                      "GA_init: mutex_init(in): %d\n", rc); exit(1); }
   rc = pthread_mutex_init(&(session->outmutex), NULL);
   if ( rc ) { qprintf(session->settings,
-		      "GA_init: mutex_init(out): %d\n", rc); exit(1); }
+                      "GA_init: mutex_init(out): %d\n", rc); exit(1); }
   rc = pthread_cond_init(&(session->incond), NULL);
   if ( rc ) { qprintf(session->settings,
-		      "GA_init: cond_init(in): %d\n", rc); exit(1); }
+                      "GA_init: cond_init(in): %d\n", rc); exit(1); }
   rc = pthread_cond_init(&(session->outcond), NULL);
   if ( rc ) { qprintf(session->settings,
-		      "GA_init: cond_init(out): %d\n", rc); exit(1); }
+                      "GA_init: cond_init(out): %d\n", rc); exit(1); }
   rc = pthread_mutex_init(&(session->cachemutex), NULL);
   if ( rc ) { qprintf(session->settings,
-		      "GA_init: mutex_init(cache): %d\n", rc); exit(1); }
+                      "GA_init: mutex_init(cache): %d\n", rc); exit(1); }
 #else
   /* No threads supported */
   if ( settings->threadcount > 1 ) return 50; rc = 0;
@@ -179,7 +179,7 @@ int GA_init(GA_session *session, GA_settings *settings,
     session->threads[i].number = i+1;
 #if THREADS
     if ( pthread_create (&session->threads[i].threadid, NULL,
-			 GA_do_thread, (void *)&(session->threads[i])) != 0 ) {
+                         GA_do_thread, (void *)&(session->threads[i])) != 0 ) {
       return 51;
     }
 #endif
@@ -239,9 +239,11 @@ int GA_evolve(GA_session *session, unsigned int generations) {
     for ( i = 0; i < session->settings->elitism; i++ ) {
       unsigned int j;
       for ( j = 0; j < session->population[i].segmentcount; j++ ) {
-	/* Insert new segments */
-	session->population[i].segments[j] = session->oldpop[session->sorted[i]].segments[j];
-	session->population[i].gdsegments[j] = session->oldpop[session->sorted[i]].gdsegments[j];
+        /* Insert new segments */
+        session->population[i].segments[j] =
+            session->oldpop[session->sorted[i]].segments[j];
+        session->population[i].gdsegments[j] =
+            session->oldpop[session->sorted[i]].gdsegments[j];
       }
     }
     /* Create a new population by roulette wheel.
@@ -361,7 +363,7 @@ unsigned int GA_roulette(GA_session *session) {
   /* printf("rand %d\n",(int)(index*64)); */
   if ( session->fitnesssum <= 0 )
     uniformroulette = 1.0/session->settings->popsize;
-  /* printf("test %f %d %f\n", session->fitnesssum, session->popsize, uniformroulette); */
+  /*printf("test %f %d %f\n",session->fitnesssum,session->popsize,uniformroulette);*/
   for ( i = 0; i < session->settings->popsize; i++ ) {
     double score = (session->fitnesssum <= 0) ? uniformroulette :
       (1.0*session->oldpop[i].fitness/session->fitnesssum);
@@ -390,7 +392,7 @@ int GA_comparator(const void *a, const void *b) {
     return 1;
   else if ( session->population[x].fitness > session->population[y].fitness )
     return -1;
-  else return 0; /* x-y; */	/* If equal sort by index to preserve order */
+  else return 0; /* x-y; */     /* If equal sort by index to preserve order */
 }
 
 static void GA_cache_fitness(GA_session *session, unsigned int i,
@@ -423,7 +425,7 @@ static void GA_cache_fitness(GA_session *session, unsigned int i,
   /* UNLOCK fitnesscache */
   j = pthread_mutex_unlock(&(session->cachemutex));
   if ( j ) { qprintf(session->settings,
-	       "GA_dcf: mutex_unlock(cache_w): %d\n", j); exit(1); }
+               "GA_dcf: mutex_unlock(cache_w): %d\n", j); exit(1); }
 #endif
 }
 
@@ -452,15 +454,15 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
     /* LOCK fitnesscache */
     j = pthread_mutex_lock(&(session->cachemutex));
     if ( j ) { qprintf(session->settings,
-		       "GA_dcf: mutex_lock(cache_r): %d\n", j); exit(1); }
+                       "GA_dcf: mutex_lock(cache_r): %d\n", j); exit(1); }
 #endif
     for ( j = 0; j < 2; j++ ) {
       if ( ( session->fitnesscache[hashbucket][j].unscaledfitness != 0 ) &&
-	   !memcmp(session->population[i].segments,
-		   session->fitnesscache[hashbucket][j].segments,
-		   sizeof(GA_segment)*session->population[i].segmentcount) ) {
+           !memcmp(session->population[i].segments,
+                   session->fitnesscache[hashbucket][j].segments,
+                   sizeof(GA_segment)*session->population[i].segmentcount) ) {
         session->population[i].fitness =
-	  session->fitnesscache[hashbucket][j].fitness;
+          session->fitnesscache[hashbucket][j].fitness;
         found = 1 + j;
         break;
       }
@@ -469,7 +471,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
     /* UNLOCK fitnesscache */
     j = pthread_mutex_unlock(&(session->cachemutex));
     if ( j ) { qprintf(session->settings,
-		       "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
+                       "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
 #endif
 
 #if 0
@@ -479,11 +481,11 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
     if ( !found ) {
       for ( j = 0; j < i; j++ ) {
         if ( !memcmp(session->population[i].segments,
-		     session->population[j].segments,
-		     sizeof(GA_segment)*session->population[i].segmentcount)) {
-	  session->population[i].fitness = session->population[j].fitness;
-	  found = 5;
-	  break;
+                     session->population[j].segments,
+                     sizeof(GA_segment)*session->population[i].segmentcount)) {
+          session->population[i].fitness = session->population[j].fitness;
+          found = 5;
+          break;
         }
       }
     }
@@ -494,11 +496,11 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
     if ( !found && session->generation > 0 ) {
       for ( j = 0; j < session->settings->popsize; j++ ) {
         if ( !memcmp(session->population[i].segments,
-		     session->oldpop[j].segments,
-		     sizeof(GA_segment)*session->population[i].segmentcount) ) {
-	  session->population[i].fitness = session->oldpop[j].unscaledfitness;
-	  found = 6;
-	  break;
+                     session->oldpop[j].segments,
+                     sizeof(GA_segment)*session->population[i].segmentcount) ) {
+          session->population[i].fitness = session->oldpop[j].unscaledfitness;
+          found = 6;
+          break;
         }
       }
     }
@@ -510,21 +512,23 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
     int rc = 0;
     if ( session->settings->distributor ) return 0;
     if ( ((rc = GA_fitness(session, thread->ref, /* FIXME */
-			   &session->population[i])) != 0)
-	 /* || isnan(session->population[i].fitness) */ ) { /* nan okay now */
+                           &session->population[i])) != 0)
+         /* || isnan(session->population[i].fitness) */ ) { /* nan okay now */
       qprintf(session->settings, "fitness error %u %f => %d\n",
-	      session->population[i].segments[0],
-	      session->population[i].fitness, rc);
+              session->population[i].segments[0],
+              session->population[i].fitness, rc);
       return 51;
     }
   }
   /*
   if ( found && founditem.fitness != session->population[i].fitness ) {
-    qprintf(session->settings, "cache error %d %08x %08x %08x vs %08x %08x %08x\n  %f != %f\n", i, founditem.segments[0], founditem.segments[1],
-	    founditem.segments[2], session->population[i].segments[0],
-	    session->population[i].segments[1],
-	    session->population[i].segments[2],
-	    founditem.fitness, session->population[i].fitness);
+    qprintf(session->settings,
+            "cache error %d %08x %08x %08x vs %08x %08x %08x\n  %f != %f\n",
+            i, founditem.segments[0], founditem.segments[1],
+            founditem.segments[2], session->population[i].segments[0],
+            session->population[i].segments[1],
+            session->population[i].segments[2],
+            founditem.fitness, session->population[i].fitness);
     return 52;
   }
   */
@@ -532,7 +536,7 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
   /* Announce caching status for segment use */
   /*
   tprintf("FND%1d hash %08x bucket %4d orig %f\n",
-	  found, hashtemp, hashbucket, session->population[i].fitness);
+          found, hashtemp, hashbucket, session->population[i].fitness);
   */
   /* Save the fitness in the cache */
   if ( ( found == 0 ) || ( found > 1 ) )
@@ -545,12 +549,12 @@ static void thread_send_result(GA_session *session, int in, int found) {
   /* Return the result to main program */
   int rc = pthread_mutex_lock(&(session->outmutex));
   if ( rc ) { qprintf(session->settings,
-		"GA_do_thread: mutex_lock(out): %d\n", rc); exit(1); }
+                "GA_do_thread: mutex_lock(out): %d\n", rc); exit(1); }
   while ( session->outflag ) {
     /* printf("Waiting for output queue to empty...\n"); */
     rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
     if ( rc ) { qprintf(session->settings,
-		  "GA_do_thread: cond_wait(out): %d\n", rc); exit(1); }
+                  "GA_do_thread: cond_wait(out): %d\n", rc); exit(1); }
     /* printf("Retrying output\n"); */
   }
   session->outindex  = in;
@@ -558,11 +562,11 @@ static void thread_send_result(GA_session *session, int in, int found) {
   session->outflag = 1;
   rc = pthread_cond_broadcast(&(session->outcond));
   if ( rc ) { qprintf(session->settings,
-		"GA_do_thread: cond_bcast(out): %d\n", rc); exit(1); }
+                "GA_do_thread: cond_bcast(out): %d\n", rc); exit(1); }
   rc = pthread_mutex_unlock(&(session->outmutex));
   if ( rc )
     { qprintf(session->settings,
-	"GA_do_thread: mutex_unlock(out): %d\n", rc); exit(1); }
+        "GA_do_thread: mutex_unlock(out): %d\n", rc); exit(1); }
   /* printf("Output completed\n"); */
 }
 
@@ -577,15 +581,15 @@ static void *GA_do_thread (void * arg) {
     /* printf("Waiting for mutex...\n"); */
     rc = pthread_mutex_lock(&(session->inmutex));
     if ( rc ) { qprintf(session->settings,
-			"GA_do_thread: mutex_lock(in): %d\n", rc); exit(1); }
+                        "GA_do_thread: mutex_lock(in): %d\n", rc); exit(1); }
     /* Wait until the job-available flag is set */
     while ( !(session->inflag) ) {
       /* printf("Waiting for cond...\n"); */
       rc = pthread_cond_wait(&(session->incond), &(session->inmutex));
       if ( rc ) { qprintf(session->settings,
-			  "GA_do_thread: cond_wait(in): %d\n", rc); exit(1); }
+                          "GA_do_thread: cond_wait(in): %d\n", rc); exit(1); }
     }
-    in = session->inindex;	/* We got data to process! */
+    in = session->inindex;      /* We got data to process! */
 
     /* In distributed mode, we'll handle the entire population in this
      * thread. */
@@ -597,13 +601,13 @@ static void *GA_do_thread (void * arg) {
     if ( session->inindex < session->settings->popsize ) {
       rc = pthread_cond_signal(&(session->incond));
       if ( rc )
-	{ qprintf(session->settings,
-		  "GA_do_thread: cond_signal(in): %d\n", rc); exit(1); }
+        { qprintf(session->settings,
+                  "GA_do_thread: cond_signal(in): %d\n", rc); exit(1); }
     }
-    else session->inflag = 0;	/* No more input data */
+    else session->inflag = 0;   /* No more input data */
     rc = pthread_mutex_unlock(&(session->inmutex));
     if ( rc ) { qprintf(session->settings,
-			"GA_do_thread: mutex_unlock(in): %d\n", rc); exit(1); }
+                        "GA_do_thread: mutex_unlock(in): %d\n", rc); exit(1); }
 
     /* Process item or items */
     if ( session->settings->distributor ) {
@@ -636,24 +640,25 @@ static void *GA_do_thread (void * arg) {
         line[0] = 0;
         /* Read result */
         if ( fgets(line, 1024, session->settings->distributor) == NULL ) {
-          qprintf(session->settings, "Read error from distributor, errno=%d\n", errno);
+          qprintf(session->settings, "Read error from distributor: %s\n",
+                  strerror(errno));
           return NULL;
         }
         //printf("  %s  at i=%u/%u\n", line, i, nexpected);
         /* DONE signal */
         if ( strncmp(line, "DONE", 4) == 0 ) {
           if ( i == nexpected ) break;
-          qprintf(session->settings, "Premature DONE while reading from distributor\n");
+          qprintf(session->settings, "Premature DONE from distributor\n");
           return NULL;
         }
         /* Prevent overflow */
         if ( i >= nexpected ) {
-          qprintf(session->settings, "Didn't recieve DONE while reading from distributor\n");
+          qprintf(session->settings, "Didn't recieve DONE from distributor\n");
           return NULL;
         }
         /* Parse message */
         if ( sscanf(line, "F %u %lf", &index, &fitness) != 2 ) {
-          qprintf(session->settings, "Parse error on message %s from distributor\n", line);
+          qprintf(session->settings, "Can't parse '%s' from distributor\n", line);
           return NULL;
         }
         if ( index < in || index >= last ) {
@@ -713,7 +718,7 @@ int GA_checkfitness(GA_session *session) {
   for ( i = 0; i < session->popsize; i++ ) {
     int found = GA_do_checkfitness(session->threads[0], i);
     if ( found > 50 ) return found; /* Error */
-    if ( !found ) fevs++;	    /* Had to do fitness evaluation */
+    if ( !found ) fevs++;           /* Had to do fitness evaluation */
     /* Track minimum and maximum fitnesses */
     if ( i == 0 || session->population[i].fitness < min )
       min = session->population[i].fitness;
@@ -740,7 +745,9 @@ int GA_checkfitness(GA_session *session) {
       }
       /* Check that this startat / cfinite is correct */
       if ( j != cfinite || i != cfinite ) {
-        qprintf(session->settings, "GA_checkfitness: nan migration failed: %d, %d, %d\n", i, j, cfinite);
+        qprintf(session->settings,
+                "GA_checkfitness: nan migration failed: %d, %d, %d\n",
+                i, j, cfinite);
         exit(1);
       }
       qprintf(session->settings, "Still only %d valid individuals...\n", i);
@@ -751,16 +758,16 @@ int GA_checkfitness(GA_session *session) {
     /* Initiate dispatch among worker threads */
     rc = pthread_mutex_lock(&(session->inmutex));
     if ( rc ) { qprintf(session->settings,
-		        "GA_checkfitness: mutex_lock(in): %d\n", rc); exit(1); }
+                        "GA_checkfitness: mutex_lock(in): %d\n", rc); exit(1); }
     session->inindex = cfinite;
     session->inflag = 1;
     rc = pthread_mutex_unlock(&(session->inmutex));
     if ( rc )
       { qprintf(session->settings,
-	        "GA_checkfitness: mutex_unlock(in): %d\n", rc); exit(1); }
+                "GA_checkfitness: mutex_unlock(in): %d\n", rc); exit(1); }
     rc = pthread_cond_signal(&(session->incond));
     if ( rc ) { qprintf(session->settings,
-		        "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
+                        "GA_checkfitness: cond_signal(in): %d\n", rc); exit(1); }
 #endif
     j = cfinite; i = 0;
     while ( j < session->settings->popsize ) {
@@ -770,14 +777,14 @@ int GA_checkfitness(GA_session *session) {
       rc = pthread_mutex_lock(&(session->outmutex));
       if ( rc )
         { qprintf(session->settings,
-		  "GA_checkfitness: mutex_lock(out): %d\n", rc); exit(1); }
+                  "GA_checkfitness: mutex_lock(out): %d\n", rc); exit(1); }
       /* Wait until the job-completed flag is set. */
       while ( !session->outflag ) {
         /* printf("Waiting for reply...\n"); */
         rc = pthread_cond_wait(&(session->outcond), &(session->outmutex));
         if ( rc )
-	  { qprintf(session->settings,
-		    "GA_checkfitness: cond_wait(out): %d\n", rc); exit(1); }
+          { qprintf(session->settings,
+                    "GA_checkfitness: cond_wait(out): %d\n", rc); exit(1); }
         /* printf("Waking up\n"); */
       }
       /* printf("outflag! \n"); */
@@ -788,11 +795,11 @@ int GA_checkfitness(GA_session *session) {
       rc = pthread_mutex_unlock(&(session->outmutex));
       if ( rc )
         { qprintf(session->settings,
-		  "GA_checkfitness: mutex_unlock(out): %d\n", rc); exit(1); }
+                  "GA_checkfitness: mutex_unlock(out): %d\n", rc); exit(1); }
       rc = pthread_cond_broadcast(&(session->outcond));
       if ( rc )
         { qprintf(session->settings,
-		  "GA_checkfitness: cond_broadcast(out): %d\n", rc); exit(1); }
+                  "GA_checkfitness: cond_broadcast(out): %d\n", rc); exit(1); }
 #else
       /* Non-threaded: Just do this fitness evaluation */
       i = j; rc = 0;
@@ -800,7 +807,7 @@ int GA_checkfitness(GA_session *session) {
 #endif
 
       if ( found > 50 ) return found; /* Error */
-      if ( !found ) fevs++;	    /* Had to do a real fitness evaluation */
+      if ( !found ) fevs++;         /* Had to do a real fitness evaluation */
 
       lprintf(session->settings, "Got %d %d.\n", j, i);
 
@@ -817,7 +824,7 @@ int GA_checkfitness(GA_session *session) {
       cfinite++;
     }
   }
-#endif	/* unless 0 */
+#endif  /* unless 0 */
   mean = mean/(cfinite ? cfinite : 1);/* session->settings->popsize; */
 
   /* Dynamic Mutation */
@@ -838,13 +845,14 @@ int GA_checkfitness(GA_session *session) {
            session->generation, mean, a, b, d,
            session->settings->mutationrate);
   }
-  else lprintf(session->settings, "DYNM %03u AVG %10.3f\n", session->generation, mean);
+  else lprintf(session->settings, "DYNM %03u AVG %10.3f\n",
+               session->generation, mean);
   /* Show statistics of caching effectiveness */
   lprintf(session->settings, "FEVS %u  -%u\n", fevs, j-fevs);
 
   /* Scale fitnesses to range 0.5-1.0 */
-  offset = 0-min;	     /* Shift range for lower bound at zero */
-  scale = max-min;	     /* Scale range for length */
+  offset = 0-min;            /* Shift range for lower bound at zero */
+  scale = max-min;           /* Scale range for length */
   /* Scale range length. Use a shorter length for higher generations
    * to quickly remove poor contenders at the beginning and preserve
    * diversity at the end. */
@@ -852,35 +860,36 @@ int GA_checkfitness(GA_session *session) {
   scaleidx = 5;
   if ( session->generation <= scaleidx )
     scalelen += (1-scalelen)*(scaleidx-session->generation)/scaleidx;
-  /* printf("min %10u => %f\nmax %10u => %f\noffset   %f   scale %f\n",0,min,0,max,offset,scale); */
+  /* printf("min %10u => %f\nmax %10u => %f\noffset   %f   scale %f\n",
+            0,min,0,max,offset,scale); */
 
   for ( i = 0; i < session->settings->popsize; i++ ) {
     session->population[i].unscaledfitness = session->population[i].fitness;
     if ( isnan(session->population[i].fitness) ) /* Killed: Minimal fitness */
       session->population[i].fitness = 0; /* FIXME: Incorrect Constant? */
-    else			/* Shift and scale fitness values */
+    else                        /* Shift and scale fitness values */
       session->population[i].fitness =
-	(session->population[i].fitness+offset)*scalelen/scale+(1-scalelen);
+        (session->population[i].fitness+offset)*scalelen/scale+(1-scalelen);
     if ( session->population[i].fitness >
-	 session->population[session->fittest].fitness ) session->fittest = i;
+         session->population[session->fittest].fitness ) session->fittest = i;
     session->fitnesssum += session->population[i].fitness;
     display_individual(session, i, 0,
                        (session->fittest == i) ? "FITM" : "ITEM");
 #if 0
     printf("%-4s %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
-	   (session->fittest == i) ? "FITM" : "ITEM", session->generation, i,
-	   session->population[i].gdsegments[0],
-	   session->population[i].fitness,
-	   session->population[i].unscaledfitness);
+           (session->fittest == i) ? "FITM" : "ITEM", session->generation, i,
+           session->population[i].gdsegments[0],
+           session->population[i].fitness,
+           session->population[i].unscaledfitness);
     /* Use more lines for additional segments */
     for ( j = 1; j < session->population[i].segmentcount; j++ )
       printf("               GD %03d %10u\n", j,
-	     session->population[i].gdsegments[j]);
+             session->population[i].gdsegments[j]);
 #endif
   }
 
   /* Sort the sorted list. */
-  GA_comparator(session, NULL);	/* Initialize comparator */
+  GA_comparator(session, NULL); /* Initialize comparator */
   /* printf("%u\n", session->sorted[0]); */
   qsort(&(session->sorted[0]), session->settings->popsize,
         sizeof(unsigned int), GA_comparator);
@@ -891,11 +900,12 @@ int GA_checkfitness(GA_session *session) {
     /* FIXME - Completely broken!!! (Fails for ga-numbers) */
     /* Does this work now? */
     int mc = memcmp(&(session->population[session->sorted[0]].segments[0]),
-		    &(session->population[session->fittest  ].segments[0]),
-		    sizeof(GA_segment)*session->population[session->fittest].segmentcount);
+                    &(session->population[session->fittest  ].segments[0]),
+                    sizeof(GA_segment)*session->population[session->fittest].
+                                          segmentcount);
     if ( mc ) {
       qprintf(session->settings, "Sort failed: S=%u vs F=%u\n",
-	      session->sorted[0], session->fittest);
+              session->sorted[0], session->fittest);
       return 2;
     }
   }
@@ -903,21 +913,21 @@ int GA_checkfitness(GA_session *session) {
   display_individual(session, session->fittest, 1, "BEST");
 #if 0
   qprintf(session->settings,
-	  "BEST %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
-	  session->generation, session->fittest,
-	  session->population[session->fittest].gdsegments[0],
-	  session->population[session->fittest].fitness,
-	  session->population[session->fittest].unscaledfitness);
+          "BEST %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
+          session->generation, session->fittest,
+          session->population[session->fittest].gdsegments[0],
+          session->population[session->fittest].fitness,
+          session->population[session->fittest].unscaledfitness);
   /* Use more lines for additional segments */
   for ( j = 1; j < session->population[session->fittest].segmentcount; j++ )
     qprintf(session->settings, "               GD %03d %10u\n", j,
-	    session->population[session->fittest].gdsegments[j]);
+            session->population[session->fittest].gdsegments[j]);
 #endif
   lprintf(session->settings, "\n");
   return 0;
 }
 
-GA_segment graydecode(GA_segment gray) { 
+GA_segment graydecode(GA_segment gray) {
   GA_segment bin;
 #if GA_segment_size == 32
   /* Optimization: b = b^(g>>1);b = b^(b>>2); ...4; ... 8; ... 16;
@@ -929,13 +939,13 @@ GA_segment graydecode(GA_segment gray) {
   bin ^= bin>>8;
   bin ^= bin>>16;
 #else
-  for ( bin = 0; gray; gray >>= 1 ) bin ^= gray; 
+  for ( bin = 0; gray; gray >>= 1 ) bin ^= gray;
 #endif
-  return bin; 
+  return bin;
 }
 
-GA_segment grayencode(GA_segment bin) { 
-  return bin ^ (bin >> 1); 
+GA_segment grayencode(GA_segment bin) {
+  return bin ^ (bin >> 1);
 }
 
 unsigned int urandom() {
@@ -978,7 +988,7 @@ static int astrcat(char **s, const char *append) {
   }
 
   /* *s is a string so concatenate. */
-  
+
   /* Did we process the same string in the last run? If this is a
    * different string from the one we just processed cache new
    * string. */
@@ -986,20 +996,20 @@ static int astrcat(char **s, const char *append) {
     offset = strlen(*s);
     oldstr = *s;
   }
-  
+
   /* Size = strlen(*s) + \n + strlen(append) + '\0'. */
   newsiz = offset + 1 + strlen(append) + 1;
-  
+
   /* Resize *s to fit new string. */
   newstr = realloc(*s, newsiz);
   if (newstr == NULL) return 2;
   *s = newstr;
-  
+
   /* *s + offset should be end of string. */
   /* Concatenate. */
   strncpy(*s + offset, "\n", newsiz - offset);
   strncat(*s + offset, append, newsiz - offset);
-  
+
   /* New string length should be exactly newsiz - 1 characters. */
   /* Store generated string's values. */
   offset = newsiz - 1;
@@ -1024,9 +1034,9 @@ static int astrcat(char **s, const char *append) {
  * \returns 0 for success.
  */
 int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
-		  const char *optstring, const struct option *long_options,
-		  int global_count, GA_my_parseopt_t my_parse_option,
-		  const char *my_usage, char **optlog, char optlogtype) {
+                  const char *optstring, const struct option *long_options,
+                  int global_count, GA_my_parseopt_t my_parse_option,
+                  const char *my_usage, char **optlog, char optlogtype) {
   int c;
   while (1) {
    /* getopt_long stores the option index here. */
@@ -1041,15 +1051,15 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
      int rc = 0;
      if ( c == 0 )
        rc = asprintf(&msg, "CFG%c %s %s", optlogtype,
-		     long_options[option_index].name, optarg ? optarg : "");
+                     long_options[option_index].name, optarg ? optarg : "");
      else {
        int i = 0;
        for ( i = 0; long_options[i].name; i++ ) {
-	 if ( long_options[i].flag == NULL && long_options[i].val == c ) {
-	   rc = asprintf(&msg, "CFG%c %s %s", optlogtype,
-			 long_options[i].name, optarg ? optarg : "");
-	   break;
-	 }
+         if ( long_options[i].flag == NULL && long_options[i].val == c ) {
+           rc = asprintf(&msg, "CFG%c %s %s", optlogtype,
+                         long_options[i].name, optarg ? optarg : "");
+           break;
+         }
        }
      }
      if ( msg && rc > 0 ) { astrcat(optlog, msg); free(msg); }
@@ -1063,10 +1073,10 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
      if ( option_index < global_count ) { /* Global option, handle here */
        /* If this option set a flag, do nothing else now. */
        if (long_options[option_index].flag != 0)
-	 break;
+         break;
        printf ("long_option %s", long_options[option_index].name);
        if (optarg)
-	 printf (" with arg %s", optarg);
+         printf (" with arg %s", optarg);
        printf ("\n");
      }
      else if (my_parse_option) /* Forward to my_parse_option */
@@ -1075,10 +1085,10 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
    case 'c':
      /* Config file - do nothing, since already parsed */
      break;
-   case 'g':			/* Number of generations */
+   case 'g':                    /* Number of generations */
      settings->generations = atoi(optarg);
      break;
-   case 'p':			/* Population size */
+   case 'p':                    /* Population size */
      settings->popsize = atoi(optarg);
      break;
    case 's':
@@ -1118,14 +1128,15 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
    case 'h':
    case '?':
      /* getopt_long already printed an error message. */
-     printf("Usage: %s [options]\n\nGeneral GA options:\n%s\nProblem-specific options:\n%s", argv[0], ga_usage, my_usage);
+     printf("Usage: %s [options]\n\nGeneral GA options:\n%s\n"
+            "Problem-specific options:\n%s", argv[0], ga_usage, my_usage);
      exit(c == '?' ? 1 : 0);
      break;
    case 1:
      printf("Internal error/1\n");
      exit(1);
      break;
-   default:			/* Revert to "my_" parser */
+   default:                     /* Revert to "my_" parser */
      if ( my_parse_option )
        (*my_parse_option)(long_options, settings, c, option_index);
      break;
@@ -1135,9 +1146,9 @@ int GA_run_getopt(int argc, char * const argv[], GA_settings *settings,
 }
 
 int GA_getopt(int argc, char * const argv[], GA_settings *settings,
-	      const char *my_optstring, const struct option *my_long_options,
-	      GA_my_parseopt_t my_parse_option, const char *my_usage,
-	      char **optlog) {
+              const char *my_optstring, const struct option *my_long_options,
+              GA_my_parseopt_t my_parse_option, const char *my_usage,
+              char **optlog) {
   /* After updating usage comments, run generate-usage.pl on this file
    * to update usage message header files.
    */
@@ -1266,9 +1277,9 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
   long_options = malloc(sizeof(struct option)*(global_count+my_count));
   if ( !long_options ) { printf("Out of memory (long_options)\n"); return 1; }
   memcpy(long_options, global_long_options,
-	 sizeof(struct option)*global_count);
+         sizeof(struct option)*global_count);
   memcpy(long_options+global_count, my_long_options,
-	 sizeof(struct option)*my_count);
+         sizeof(struct option)*my_count);
   /* Combine global_optstring and my_optstring */
   optstring = malloc(strlen(global_optstring)+strlen(my_optstring)+1);
   if ( !optstring ) { printf("Out of memory (optstring)\n"); return 1; }
@@ -1286,7 +1297,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
    int option_index = 0;
 
    c = getopt_long(argc,temp_argv, "c:", config_options,
-		   &option_index);
+                   &option_index);
    if ( c == 'c' ) {
      if ( loadconfig ) {
        printf("Too many configuration files specified\n");
@@ -1294,7 +1305,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
      }
      loadconfig = optarg;
    }
-   else if (c == -1)		/* Detect the end of the options. */
+   else if (c == -1)            /* Detect the end of the options. */
      break;
   }
   free(temp_argv);
@@ -1323,11 +1334,11 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
       int rc = fscanf(fh, " %511s%*[ \t]%4095[^\n]", key, value);
       /* printf("%d %p %p\n", rc, key, value); */
       if ( rc == EOF && ferror(fh) ) {
-	char *str;
-	asprintf(&str, "%s: %s", argv[0], loadconfig);
-	perror(str);
-	free(str);
-	exit(1);
+        char *str;
+        asprintf(&str, "%s: %s", argv[0], loadconfig);
+        perror(str);
+        free(str);
+        exit(1);
       }
       else if ( rc == EOF ) break;
       else if ( rc >= 1 && ( key[0] == '#' || key[0] == ';' || key[0] == '%' ||
@@ -1337,19 +1348,19 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
         continue;
       }
       else if ( rc < 1 || rc > 2 || !key ) {
-	printf("%s: %s: Syntax error\n", argv[0], loadconfig);
-	exit(1);
+        printf("%s: %s: Syntax error\n", argv[0], loadconfig);
+        exit(1);
       }
       /* printf("'%s' '%s'\n", key, value ? value : ""); */
       fake_argv[0] = argv[0];
       if ( asprintf(&fake_argv[1], "--%s", key) == -1 ) {
-	printf("%s: %s: Out of Memory\n", argv[0], loadconfig);
-	exit(1);
+        printf("%s: %s: Out of Memory\n", argv[0], loadconfig);
+        exit(1);
       }
       if ( rc >= 2 ) fake_argv[2] = value;
       optind = 1;
       GA_run_getopt(rc+1, fake_argv, settings, optstring, long_options,
-		    global_count, my_parse_option, my_usage, optlog, 'F');
+                    global_count, my_parse_option, my_usage, optlog, 'F');
       /* free(fake_argv[1]); */
       free(key);
       /* free(value); */ /* Don't free value, we might keep a pointer to it */
@@ -1359,7 +1370,7 @@ int GA_getopt(int argc, char * const argv[], GA_settings *settings,
 
   optind = 1;
   GA_run_getopt(argc, argv, settings, optstring, long_options,
-		global_count, my_parse_option, my_usage, optlog, 'A');
+                global_count, my_parse_option, my_usage, optlog, 'A');
   free(optstring);
   free(long_options);
   return 0;
@@ -1441,7 +1452,9 @@ int lprintf(const GA_settings *settings, const char *format, ...) {
   return rc;
 }
 
-/* From http://www.linuxquestions.org/questions/programming-9/how-to-calculate-time-difference-in-milliseconds-in-c-c-711096/ */
+/* From http://www.linuxquestions.org/questions/programming-9/how-to-calculate-
+    time-difference-in-milliseconds-in-c-c-711096/ (http://tinyurl.com/7bjz2u3)
+ */
 long long
 timeval_diff(struct timeval *difference,
              struct timeval *end_time,
