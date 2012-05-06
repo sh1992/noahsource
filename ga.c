@@ -474,23 +474,6 @@ static int GA_do_checkfitness(GA_thread *thread, unsigned int i) {
                        "GA_dcf: mutex_unlock(cache_r): %d\n", j); exit(1); }
 #endif
 
-#if 0
-    //!THREADS
-    /* Also check the earlier entries in the new population. Not
-     * threadsafe. */
-    if ( !found ) {
-      for ( j = 0; j < i; j++ ) {
-        if ( !memcmp(session->population[i].segments,
-                     session->population[j].segments,
-                     sizeof(GA_segment)*session->population[i].segmentcount)) {
-          session->population[i].fitness = session->population[j].fitness;
-          found = 5;
-          break;
-        }
-      }
-    }
-#endif
-
     /* Also check the old population.  No lock necessary,
      * oldpop only modified in GA_evolve */
     if ( !found && session->generation > 0 ) {
@@ -714,18 +697,6 @@ int GA_checkfitness(GA_session *session) {
   session->fittest = 0;
   session->fitnesssum = 0;
   /* Evaluate fitness for each individual */
-#if 0
-  for ( i = 0; i < session->popsize; i++ ) {
-    int found = GA_do_checkfitness(session->threads[0], i);
-    if ( found > 50 ) return found; /* Error */
-    if ( !found ) fevs++;           /* Had to do fitness evaluation */
-    /* Track minimum and maximum fitnesses */
-    if ( i == 0 || session->population[i].fitness < min )
-      min = session->population[i].fitness;
-    if ( i == 0 || session->population[i].fitness > max )
-      max = session->population[i].fitness;
-  }
-#else
   cfinite = 0; /* Number of individuals with finite fitness */
   /* Continue until we have a full population */
   while ( cfinite < session->settings->popsize ) {
@@ -824,7 +795,6 @@ int GA_checkfitness(GA_session *session) {
       cfinite++;
     }
   }
-#endif  /* unless 0 */
   mean = mean/(cfinite ? cfinite : 1);/* session->settings->popsize; */
 
   /* Dynamic Mutation */
@@ -875,17 +845,6 @@ int GA_checkfitness(GA_session *session) {
     session->fitnesssum += session->population[i].fitness;
     display_individual(session, i, 0,
                        (session->fittest == i) ? "FITM" : "ITEM");
-#if 0
-    printf("%-4s %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
-           (session->fittest == i) ? "FITM" : "ITEM", session->generation, i,
-           session->population[i].gdsegments[0],
-           session->population[i].fitness,
-           session->population[i].unscaledfitness);
-    /* Use more lines for additional segments */
-    for ( j = 1; j < session->population[i].segmentcount; j++ )
-      printf("               GD %03d %10u\n", j,
-             session->population[i].gdsegments[j]);
-#endif
   }
 
   /* Sort the sorted list. */
@@ -911,18 +870,6 @@ int GA_checkfitness(GA_session *session) {
   }
   /* Display the best individual */
   display_individual(session, session->fittest, 1, "BEST");
-#if 0
-  qprintf(session->settings,
-          "BEST %03u %03u   GD 000 %10u score %9.7f orig %15.3f\n",
-          session->generation, session->fittest,
-          session->population[session->fittest].gdsegments[0],
-          session->population[session->fittest].fitness,
-          session->population[session->fittest].unscaledfitness);
-  /* Use more lines for additional segments */
-  for ( j = 1; j < session->population[session->fittest].segmentcount; j++ )
-    qprintf(session->settings, "               GD %03d %10u\n", j,
-            session->population[session->fittest].gdsegments[j]);
-#endif
   lprintf(session->settings, "\n");
   return 0;
 }

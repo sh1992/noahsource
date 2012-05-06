@@ -481,16 +481,6 @@ int generate_input_files(specopts_t *opts, unsigned int generation,
         }
       }
     }
-#if 0
-    fprintf(fh, opts->template[i], x[0] /* A */,
-            opts->linkbc?((x[1]+x[2])/2):x[1] /* B */,
-            opts->linkbc?((x[1]-x[2])/2):x[2] /* C */,
-            djkstr[0], djkstr[1], djkstr[2], djkstr[3], djkstr[4]
-           ); /* FIXME */
-    //B+C/B-C
-    //fprintf(fh, opts->template[i], x[0], (x[1]+x[2])/2, (x[1]-x[2])/2); /* FIXME */
-    /* Error checking for fprintf? */
-#endif
     if ( fclose(fh) ) {
       printf("Failed to close input file: %s\n", strerror(errno));
       return retval;
@@ -498,7 +488,7 @@ int generate_input_files(specopts_t *opts, unsigned int generation,
   }
   return subfile;
 }
-#endif
+#endif /* unless USE_SPCAT_OBJ */
 
 /* getline is a GNU extension. It reads a line of text, malloc/reallocing the
  * output buffer as necessary. Implement it using fgets. */
@@ -881,7 +871,7 @@ int main(int argc, char *argv[]) {
      * Use a random number of bins each generation
      */
     {"random-bins", required_argument, 0, 58}, /* FIXME: Optional default */
-    /** --components
+    /** --components NUMBER
      *
      * Number of components to fit
      */
@@ -1432,29 +1422,6 @@ int main(int argc, char *argv[]) {
       return rc;
     }
 
-#if 0          /* Debugging mode: enumeration of all values */
-    {
-      if ( SEGMENTS != 1 || settings.threadcount != 1 ) {
-        qprintf(&settings, "Settings error\n");
-        exit(1);
-      }
-      GA_individual *x = &(ga.population[0]);
-      int rc;
-      unsigned int i;
-      i = -1;//2082167296;
-      do {
-        i+=10000;
-        x->segments[0] = grayencode(i);
-        rc = GA_fitness(&ga, ga.threads[0].ref, x);
-        if ( rc != 0 ) {
-          qprintf(&settings, "fitness error, %d\n", rc);
-          exit(1);
-        }
-        printf("ENUM %u %f\n", i, x->fitness);
-      } while ( x->segments[0] <= 0xFFFFFFFF); //2107767296 );
-    }
-#endif
-
     lprintf(&settings, "Starting %d generations\n", settings.generations);
     if ( (rc = GA_evolve(&ga, 0)) != 0 ) {
       qprintf(&settings, "GA_evolve failed: %d\n", rc);
@@ -1489,10 +1456,6 @@ GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
                              const unsigned int j) {
   specopts_t *opts = (specopts_t *)ga->settings->ref;
   GA_segment r = GA_rand(ga);
-  /*
-  GA_segment ideal[] = {2094967296, 1600000000, 100000000};
-  GA_segment range[] = {0.05*ideal[0], 0.05*ideal[1], 0.05*ideal[2]};
-  */
   if ( opts->popfile ) {
     // Note that the random state will be completely different.
     r = grayencode(opts->popdata[i*opts->componentcount*SEGMENTS+j]);
@@ -1501,10 +1464,8 @@ GA_segment GA_random_segment(GA_session *ga, const unsigned int i,
     unsigned int realr;
     realr = (unsigned)((double)(r)*(opts->rangemax[j]-opts->rangemin[j])
                        /RAND_MAX)+opts->rangemin[j];
-    //printf("%d\n", realr);
     r = grayencode(realr);
-    //printf("%03d %u < %u < %u\n", i, opts->rangemin[j], realr,
-    //                              opts->rangemax[j]);
+    //printf("%03d %u < %u < %u\n",i,opts->rangemin[j],realr,opts->rangemax[j]);
   }
   return r;
 }
@@ -1926,24 +1887,6 @@ int GA_fitness(const GA_session *ga, void *thbuf, GA_individual *elem) {
     if ( binerror[i] < .01 ) binerror[i] = .01;
     fitness += comp*binweights[i]*binerror[i];
   }
-
-#if 0
-  xi=0;
-  /* Iterate over all y (generated) points, comparing to nearest x
-   * (observation) point. Assumes points are with ascending frequency.
-   */
-  for ( yi=0; yi<compdatacount; yi++ ) {
-    float compa = sqrtf(powf(fabs(observation[xi].a-compdata[yi].a),2) +
-                        powf(fabs(observation[xi].b-compdata[yi].b),2));
-    while ( xi+1 < observationcount ) {
-      float compb = sqrtf(powf(fabs(observation[xi+1].a-compdata[yi].a),2) +
-                          powf(fabs(observation[xi+1].b-compdata[yi].b),2));
-      if ( compb < compa ) { xi++; compa = compb; }
-      else break;
-    }
-    fitness += compa;
-  }
-#endif
 
   elem->fitness = -fitness*1000;
   /* printf("%u\n",elem->segments[0]); */

@@ -1,7 +1,6 @@
 #
 # gaspecclient.pl - Distributed Computing Client for ga-spectroscopy.
 #
-#
 # This file is dynamically (re)loaded by each worker thread whenever the
 # application changes. PERL THREADS ARE BUGGY: KEEP THIS CODE SIMPLE.
 #

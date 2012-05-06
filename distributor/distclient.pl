@@ -571,8 +571,6 @@ sub WorkThread {
             $id = shift @pendingwork;
         }
         my $obj = $work{$id};
-        #$obj->{thread} = $thread;
-        #{ lock(@threadjobs); $threadjobs[$thread] = $id }
         eval {
             PostStatus($id, mode => 'STARTING', thread => $thread);
             # Check files
@@ -605,10 +603,6 @@ sub WorkThread {
             { lock(@finishedwork); push @finishedwork, shared_clone($reply) }
         };
         #print "Finished\n";
-        #{
-        #    lock(@threadjobs);
-        #    $threadjobs[$thread] = undef if $threadjobs[$thread] eq $id;
-        #};
     }
 }
 
