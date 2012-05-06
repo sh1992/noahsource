@@ -85,8 +85,7 @@ case "$FORMAT" in
         NOFITNESS=1
         EXT=.ps
         ;;
-    latex)
-    latexcolor)
+    latex|latexcolor)
         [ -z "$SIZE" ] && SIZE="6in,3.99in"
         COLORSPEC=""; [ "$FORMAT" = latexcolor ] && COLORSPEC="color solid"
         FORMAT="epslatex size $SIZE dl 2 $COLORSPEC"
