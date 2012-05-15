@@ -71,6 +71,8 @@ $2"; fi; USETITLE=$((USETITLE+1)); shift 2 ;; # Newline-separated
     esac
 done
 
+ORIGFORMAT="$FORMAT"
+
 MATCHLT=-1 # Line type for match spectrum
 case "$FORMAT" in
     png)
@@ -164,7 +166,7 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
 
     echo "$FN" '=>' "$OUT"
     PLOT="$PLOT\"< $FILTER $FN\" using 1:(10**(\$3)) with impulses \\
-                             title \"$MYTITLE\", 0 lt 0 title \"\""
+                             ls $INDEX title \"$MYTITLE\", 0 lt 0 title \"\""
     if [ "$INDEX" -ge "$USETITLE" ]; then (
         cat <<EOF
         set term $FORMAT
@@ -172,6 +174,10 @@ while [ $# -gt 1 ] || [ -z "$MATCH" -a $# -eq 1 ]; do
         set xrange [$XRANGE]
         set x2range [$XRANGE]
         set lmargin at screen .1
+EOF
+        [ "$ORIGFORMAT" = "latexcolor" ] && cat <<EOF
+        set style line 2 lc 3
+        set style line 3 lc -1
 EOF
         [ "$EXT" = ".tex" ] && cat <<EOF
         set lmargin at screen .14
