@@ -7,6 +7,8 @@ use base 'Exporter';
 use warnings;
 use strict;
 
+our $SEGMENTS = 8; # Must match ga-spectroscopy.c
+
 our @EXPORT = qw(convert_filename open_compressed parse_logfile);
 
 my %compressors = (bz2 => 'bzip2', xz => 'xz', gz => 'gzip', lzma => 'lzma',
@@ -58,7 +60,7 @@ READLOOP:
             my @params = ();
             while ($_ && m/GD\s+(\d+)\s+(\d+)/) {
                 # Format and save this parameter
-                my ($idx, $val) = ($1, $2);
+                my ($ridx, $idx, $val) = ($1, $1%$SEGMENTS, $2);
                 if ( $idx > 2 ) { # DJ, DJK, DK, dj, dk
                     my $zero = GA_djk_zero();
                     $val = (($val > $zero) ? '-' : '').
