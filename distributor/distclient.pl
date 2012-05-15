@@ -834,8 +834,6 @@ sub UploadFiles {
     my @reply = ();
     foreach my $f ( @$outfiles ) {
         my $buf = '';
-        WorkFail($id, "Invalid output filename $f")
-            unless $f =~ m/^(([a-zA-Z0-9]+)[\/\\])?([-_.a-zA-Z0-9]+)$/;
         open F, '<', $f or WorkFail($id, "Failed to read output file $f");
         binmode F; # FIXME buffered IO?
         1 while sysread(F, $buf, 512, length($buf));
