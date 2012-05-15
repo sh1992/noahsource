@@ -12,7 +12,7 @@ BEGIN { chdir $FindBin::Bin; push @INC, "$FindBin::Bin/lib" }
 print "Building for $^O.\n";
 
 my $out = "./out-$^O/";
-my @programs = ('distclient.pl', 'distclientwx.pl'); #wrapper.pl, osprobe.pl
+my @programs = ('distclient.pl', 'distclientwx.pl', 'distclientplain.pl'); #wrapper.pl, osprobe.pl
 my @datafiles = ('server.conf', 'box.ico');
 my @extramodules = ();#'Win32::OLE');
 push @Module::ScanDeps::IncludeLibs, @INC;
