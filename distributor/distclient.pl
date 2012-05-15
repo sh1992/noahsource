@@ -27,7 +27,7 @@ use if $^O eq 'MSWin32', Win32::API;
 use warnings;
 use strict;
 
-our $VERSION = 20120308;
+our $VERSION = 20120515;
 my $USERAGENT = "distclient.pl/$VERSION";
 my $IPC_PORT = 29482;
 
@@ -180,6 +180,33 @@ if ( $^O eq 'MSWin32' ) {
 sub DoInhibit {
     # 1 = ES_SYSTEM_REQUIRED
     $SetThreadExecutionState->Call(1) if $SetThreadExecutionState;
+}
+
+# Process priority on Win32
+my ($OpenProcess,$SetPriorityClass,$CloseHandle) = (undef,undef,undef);
+if ( $^O eq 'MSWin32' ) {
+    # HANDLE OpenProcess(DWORD dwDesiredAccess, BOOL bInheritHandle,
+    #                    DWORD dwProcessId);
+    # BOOL SetPriorityClass(HANDLE hProcess, DWORD dwPriorityClass);
+    # BOOL CloseHandle(HANDLE hObject);
+    $OpenProcess = Win32::API->new('kernel32','OpenProcess','NIN','N')
+        or die "Can't access OpenProcess";
+    $SetPriorityClass = Win32::API->new('kernel32','SetPriorityClass','NN','I')
+        or die "Can't access SetPriorityClass";
+    $CloseHandle = Win32::API->new('kernel32','CloseHandle','N','I')
+        or die "Can't access CloseHandle";
+}
+sub DoNice {
+    my ($pid) = @_;
+    return unless $OpenProcess and $SetPriorityClass and $CloseHandle;
+    # PROCESS_SET_INFORMATION = 0x0200
+    my $handle = $OpenProcess->Call(0x200, 0, $pid);
+    if ( !$handle ) { warn "Could not open handle for process $pid"; return }
+    # IDLE_PRIORITY_CLASS = 0x00000040
+    if ( !$SetPriorityClass->Call($handle, 0x00000040) )
+        { warn "Could not set priority for process $pid" }
+    if ( !$CloseHandle->Call($handle) )
+        { warn "Could not close handle for process $pid" }
 }
 
 # Initialize the temporary directory
@@ -648,10 +675,10 @@ sub DownloadFiles {
             WorkFail($id,"Workunit provided multiple applications") if $appfn;
             $appfn = $fn;
         }
-        elsif ( $fn =~ m/^(([a-z]+)\/([-_.a-zA-Z0-9]+))$/ and
-                ( !-e $2 or -d $2 ) ) {
+        elsif ( $fn =~ m/^(([a-zA-Z0-9]+)[\/\\])?([-_.a-zA-Z0-9]+)$/ and
+                ( !defined($2) or !-e $2 or -d $2 ) ) {
             my ($dir,$basename) = ($2,$3);
-            mkdir $dir unless -d $dir;
+            mkdir $dir if defined($dir) && !-d $dir;
         }
         else { return WorkFail($id, "Invalid filename $fn") }
         my $checksum = md5($fn);
@@ -807,6 +834,8 @@ sub UploadFiles {
     my @reply = ();
     foreach my $f ( @$outfiles ) {
         my $buf = '';
+        WorkFail($id, "Invalid output filename $f")
+            unless $f =~ m/^(([a-zA-Z0-9]+)[\/\\])?([-_.a-zA-Z0-9]+)$/;
         open F, '<', $f or WorkFail($id, "Failed to read output file $f");
         binmode F; # FIXME buffered IO?
         1 while sysread(F, $buf, 512, length($buf));

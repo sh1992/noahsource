@@ -17,28 +17,44 @@ use URI;
 use warnings;
 use strict;
 
-my ($DHOST, $DPORT) = ('localhost', 9933);  # Connect to server
-my ($LHOST, $LPORT) = ('localhost', 2222);  # Listen for ga-spectroscopy
-my ($WHOST, $WPORT) = ('localhost', 9990);  # HTTP host and port
+# Distributed computing server. Overridden by server.conf, if present.
+my ($SHOST, $SPORT) = ('localhost', 9933);
+# Hostname and port number to listen on for connections from ga-spectroscopy.
+my ($LHOST, $LPORT) = ('localhost', 2222);
+# Hostname and port number for HTTP server for clients to load data files.
+# If URLs do not include a hostname, the value of $WHOST may have no effect.
+my ($WHOST, $WPORT) = ('localhost', 9990);
 
 # Load some server information from server.conf
 open F, '<', 'server.conf' or die "Cannot load server.conf: $!";
 my $serverconf = from_json(join '', <F>);
 close F;
-$WHOST = $serverconf->{host} if $serverconf->{host}; # HTTP hostname
-$DPORT = $serverconf->{port} if $serverconf->{port}; # Server port
+$SPORT = $serverconf->{host} if $serverconf->{host}; # Server hostname
+$SPORT = $serverconf->{port} if $serverconf->{port}; # Server port
 
-my $SPECDIR = '..';                         # CWD for ga-spectroscopy processes
-my $DATADIR = '../data';                    # Location of data directory
-my $DATAURL = "http://:$WPORT/spec/data";   # URL of the same (default $WHOST)
-my $TEMPDIR = '../temp';                    # Location of a temporary location
-my $TEMPURL = "http://:$WPORT/spec/temp";   # URL of the same (default $WHOST)
-my $APPDIR = '.';
-my $APPNAME = 'ga-spectroscopy.app';
+# Working directory for ga-spectroscopy processes. Used to resolve relative
+# pathnames for files specified in GA configuration.
+my $SPECDIR = '..';
+# Location of data directory. Should contain all data files (SPCAT templates,
+# observed spectrum, etc.)
+my $DATADIR = "$SPECDIR/data";
+# Location of temporary directory. Distributor will store temporary data here
+# for workers to fetch (app, configuration, etc.)
+my $TEMPDIR = "$SPECDIR/temp";
+# Location of app (program to run on client). Directory and filename. Will
+# be copied to the temporary directory to allow access from workers.
+my ($APPDIR, $APPNAME) = ('.', 'ga-spectroscopy.app');
+# Location for uploaded files, unless "data:" upload is used.
+my $INBOXDIR = "$SPECDIR/inbox";
+
+# URLs of the same. If hostname is not included, client will use same hostname
+# as the server it connected to.
+my $DATAURL = "http://:$WPORT/spec/data";
+my $TEMPURL = "http://:$WPORT/spec/temp";
 my $APPURL = "$TEMPURL/$APPNAME";
-my $INBOXDIR = '../inbox';
-#my $UPLOADURL = "http://$WHOST:$WPORT/spec/upload"; # URL of uploader
+#my $UPLOADURL = "http://:$WPORT/spec/upload"; # URL of upload service
 my $UPLOADURL = 'data:';
+
 # Name of data and temporary directories on workers
 my ($REMOTEDATADIR,$REMOTETEMPDIR) = ('data','temp');
 my $WUDURATION = 10;
@@ -53,8 +69,8 @@ close F;
 die "No job-sender token" unless $JOBSENDERTOKEN;
 my $DISPATCHID = "gaspec-$$";
 
-my $distsock = IO::Socket::INET->new(PeerAddr => $DHOST, PeerPort => $DPORT)
-    or die "Cannot connect to $DHOST:$DPORT: $!";
+my $distsock = IO::Socket::INET->new(PeerAddr => $SHOST, PeerPort => $SPORT)
+    or die "Cannot connect to $SHOST:$SPORT: $!";
 
 my $galisten = IO::Socket::INET->new(LocalAddr => $LHOST, LocalPort => $LPORT,
                                      Listen => 5, Reuse => 1)
@@ -559,13 +575,6 @@ sub SendWork {
     print $distsock 'DISPATCH ',to_json($workunits{$wuid}),"\n";
     # Tell the server that we will issue no more work in the immediate future.
     print $distsock "NOMOREWORK\n" if GetNextIndividual(-1,-1) < 0;
-}
-
-# Assign an individual to a worker
-sub AssignItem {
-    my ($item, $worker) = @_;
-    $items[$item]{sent}++;
-    return sprintf("I %d %s", $item, $items[$item]{values});
 }
 
 # Let us try to send some items out

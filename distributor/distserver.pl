@@ -12,7 +12,7 @@ use warnings;
 use strict;
 
 # Configuration
-my $VERSION = 20120210;
+my $VERSION = 20120515;
 my $PORT = 9933;
 
 # Minimum client version; older clients will be jailed. They will not be sent
@@ -28,6 +28,8 @@ my $DISTTIMEOUT = 3;
 my $DUMPINTERVAL = 60;
 # How frequently to check for completed workunits
 my $PROBEINTERVAL = 1;
+# File containing work submission password
+my $KEYFILE = 'distserver.key';
 
 # Create listener socket
 my $listener = IO::Socket::INET->new
@@ -36,12 +38,17 @@ my $listener = IO::Socket::INET->new
 my $select = IO::Select->new($listener);
 local $SIG{'PIPE'} = 'IGNORE';
 
-# Start problem-specific portion
+# Load password for job submission
 my $JOBSENDERTOKEN = Digest::MD5::md5_hex('DISTJOBS', $VERSION, $$, rand());
-print "TOKEN: $JOBSENDERTOKEN\n";
-open F, '>', 'distserver.key' or die "Cannot load distserver.key: $!";
-print F $JOBSENDERTOKEN,"\n";
+if ( open F, '<', $KEYFILE ) { ($JOBSENDERTOKEN = <F>) =~ s/\s//g }
+else {
+    warn "Can't load from $KEYFILE: $!";
+    print "Generating key...\n";
+    open F, '>', $KEYFILE or die "Cannot write to $KEYFILE: $!";
+    print F $JOBSENDERTOKEN, "\n";
+}
 close F;
+print "Key: $JOBSENDERTOKEN\n";
 
 my %workunits = ();
 my @workunits = ();         # List of keys, sorted by lazy deadline
@@ -115,19 +122,19 @@ while ( 1 ) {
                         next;
                     }
                     my @k = keys %workers;
-                    my $worker = undef;
+                    my $wc = undef;
                     # Pick a random worker (FIXME: Pick fastest worker?)
                     my $i = int(rand()*@k);
                     for ( my $c = 0; $c < @k; $c++ ) {
                         $i = ($i+1)%@k;
                         my $w = $workers{$k[$i]};
                         if ( ($w->{assigned}||0) < ($w->{threads}||0) ) {
-                            $worker = $w;
+                            $wc = $w;
                             last;
                         }
                     }
-                    if ( $worker ) {
-                        my $str = to_json($worker);
+                    if ( $wc ) {
+                        my $str = to_json({id=>$wc->{id}, name=>$wc->{name}});
                         print $sock "WORKER $str\n";
                     }
                     else { print $sock "NOWORKERS\n" } # Should never happen

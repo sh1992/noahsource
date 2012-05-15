@@ -63,14 +63,8 @@ sub Work {
         $cmd = "nice -n19 $cmd" if $^O ne 'MSWin32';
         $pid = open SPEC, '-|', $cmd
             or main::WorkFail($id, 'Cannot start gaspec client');
-        # Nice the process on MSWin32. Note that it would be better to do this
-        # in CreateProcess...
-        if ( $HAVE_Win32_Process ) {
-            my $process;
-            if ( Win32::Process::Open($process, $pid, 0) ) {
-                $process->SetPriorityClass(&IDLE_PRIORITY_CLASS);
-            }
-        }
+        # Nice the process on MSWin32.
+        main::DoNice($pid);
         { my $oldfh = select SPEC; $| = 1; select $oldfh }
         #print "$id Reading\n";
         while ( <SPEC> ) {
