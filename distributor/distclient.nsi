@@ -4,7 +4,8 @@
 ; Built with NSIS.
 ;
 
-!define LONGNAME "${DISTCLIENT_SERVERNAME} Distributed Computing Client"
+;!define LONGNAME "${DISTCLIENT_SERVERNAME} Distributed Computing Client"
+!define LONGNAME "Distributed Computing Client"
 
 ; The name of the installer
 Name "${LONGNAME}"
