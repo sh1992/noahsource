@@ -9,9 +9,10 @@ if len(sys.argv) != 3:
     print "Usage: app.py something.app input-file"
     sys.exit(1)
 
-# Read input file
+# Read the second input file (the first input file is the app)
 infile = sys.argv[2]
 fh = open(infile, 'r')
+# Read first line from infile, convert to number
 number = int(fh.readline())
 fh.close()
 
@@ -25,9 +26,11 @@ print "DISTCLIENT STATUS 0/%d" % (number)
 # Square value
 output = 0
 for i in range(number):
-    output += number                        # Do something
+    # Do something
+    output += number
     time.sleep(1)
-    print "DISTCLIENT STATUS %d" % (i+1)    # Update progress
+    # Update progress
+    print "DISTCLIENT STATUS %d" % (i+1)
 
 # We don't need the input file anymore
 os.unlink(infile)

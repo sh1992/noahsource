@@ -12,7 +12,7 @@ import json, random
 # URL of .tar.gz file named slowsquare.app that contains slowsquare-app.pl
 # as all/app.pl
 # tar --transform 's|.*|all/app.pl|S' -czf slowsquare.app slowsquare-app.pl
-APP_NAME = "slowsquare.app"
+#APP_NAME = "slowsquare.app"
 
 # Python version of app; see slowsquare-app.py
 APP_NAME = "slowsquare-python.app"
