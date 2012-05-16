@@ -22,7 +22,7 @@ cp -p slowsquare-app.py "$TD/all/app.py"
 md5sum slowsquare-python.app | cut -c1-32 > slowsquare-python.app.md5
 rm -r $TD
 
-echo "Copying apps to ../temp for access via http://localhost:9990/spec/temp/"
 TARGET=../temp
 [ `hostname` = 'gaspec-chemlab' ] && TARGET=~/spec/temp
+echo "Copying apps to $TARGET for access via http://localhost:9990/spec/temp/"
 cp -p slowsquare.app slowsquare-python.app "$TARGET"
