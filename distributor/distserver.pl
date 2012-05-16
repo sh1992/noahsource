@@ -12,12 +12,12 @@ use warnings;
 use strict;
 
 # Configuration
-my $VERSION = 20120515;
+my $VERSION = 20120516;
 my $PORT = 9933;
 
 # Minimum client version; older clients will be jailed. They will not be sent
 # any work, and clients version >=20120210 will display an error message.
-my $MINCLIENT = 20120209;
+my $MINCLIENT = 20120516;
 
 # Deadline factors
 my ($LAZYDEADLINE, $AGRESSIVEDEADLINE) = (5, 1.5);
@@ -49,6 +49,9 @@ else {
 }
 close F;
 print "Key: $JOBSENDERTOKEN\n";
+
+my $DEBUG = @ARGV && $ARGV[0] =~ m/debug|all/i;
+print "Use --debug for detailed output.\n" unless $DEBUG;
 
 my %workunits = ();
 my @workunits = ();         # List of keys, sorted by lazy deadline
@@ -112,7 +115,9 @@ while ( 1 ) {
         }
         while ( $clients{$id}{buf} =~ s/^(.*?)\r*\n// ) {
             my $l = $1;
-            { (my $pl = $l) =~ s/data:[^"]+/data:.../g; print "D$id: $pl\n" }
+            if ( $DEBUG or $clients{$id}{kind} < 1 or
+                 $l !~ m/^(HAVEWORK|DISPATCH|WORKFINISH)/ )
+                { (my $pl=$l) =~ s/data:[^"]+/data:.../g; print "D$id: $pl\n" }
             if ( $clients{$id}{kind} == 2 ) {       # Job Generator
                 if ( $l =~ m/^HAVEWORK/ ) {
                     $idledistributors-- if $clients{$id}{idle};
@@ -175,7 +180,7 @@ while ( 1 ) {
                         next;
                     }
                     # Send the work to the client.
-                    print $sock "WORKACCEPTED\n";
+                    print $sock "WORKACCEPTED $obj->{id}\n";
                     print $workersock "WORK $json\n";
                     $workers{$workerid}{assigned}++;
                     $busythreads++;
@@ -287,8 +292,8 @@ while ( 1 ) {
             }
             else {
                 # Process message from client
-                if ( $l =~ m/^HELLO (\S+) (\S+) ([0-9a-fA-F]+)$/i ) {
-                    my ($sockver, $name, $ident) = ($1, $2, lc $3);
+                if ( $l =~ m/^HELLO (\S+) (\S+) (\S+)$/i ) {
+                    my ($sockver, $name, $ident) = ($1, $2, $3);
                     $name =~ tr/-_.0-9a-zA-Z//cd;
                     # Hello messages should have Version and ID/Permissions.
                     if ( $ident eq $JOBSENDERTOKEN ) {
@@ -300,7 +305,7 @@ while ( 1 ) {
                         $idledistributors++;
                     }
                     elsif ( $sockver eq '0' ) {
-                        print $sock "ERR Invalid job sender token\n";
+                        print $sock "ERR Invalid key\n";
                     }
                     else {
                         if ( exists($workers{$ident}) ) {
@@ -319,10 +324,14 @@ while ( 1 ) {
                         }
                         else {
                             # Worker client.
-                            print $sock "OK I will now send you work\n";
                             print $sock "GRACEFACTOR $AGRESSIVEDEADLINE\n";
                             # Is the client working on any jobs right now?
                             print $sock "QUERYWORK\n";
+                            # Client will respond to commands before getting OK
+                            # and this way will avoid race where we send
+                            # QUERYWORK and then a workunit before receiving
+                            # (empty) QUERYWORK response.
+                            print $sock "OK I will now send you work\n";
                             NewWorker();
                         }
                         NotifyMonitors('CREATE', 'WORKER', $ident);

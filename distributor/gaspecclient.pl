@@ -64,7 +64,7 @@ sub Work {
         $pid = open SPEC, '-|', $cmd
             or main::WorkFail($id, 'Cannot start gaspec client');
         # Nice the process on MSWin32.
-        main::DoNice($pid);
+        main::Win32Nice($pid);
         { my $oldfh = select SPEC; $| = 1; select $oldfh }
         #print "$id Reading\n";
         while ( <SPEC> ) {
@@ -107,7 +107,6 @@ sub Work {
 #    print "appstop\n";
 #    # Do nothing
 #}
-
 
 # Return function pointers to distclient
 my $P = __PACKAGE__.'::';

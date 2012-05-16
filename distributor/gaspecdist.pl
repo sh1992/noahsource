@@ -80,6 +80,9 @@ local $SIG{'PIPE'} = 'IGNORE';
 my $select = IO::Select->new($distsock, $galisten);
 my $distbuf = '';
 
+my $DEBUG = @ARGV && $ARGV[0] =~ m/debug|all/i;
+print "Use --debug for detailed output.\n" unless $DEBUG;
+
 # my %workers = ();
 my %workunits = ();
 my %socks = ();             # Sockets (and GA processes)
@@ -103,7 +106,8 @@ sub mythread {
                 # Handle data from socket
                 while ( $distbuf =~ s/^(.*?)\r*\n// ) {
                     my $l = $1;
-                    { (my $pl = $l) =~ s/data:[^"]+/data:.../g; print "S0: $pl\n" }
+                    if ( $DEBUG or $l !~ m/^((|N(O|EW))WORKER|WORKFINISH)/ )
+                        {(my $pl=$l)=~s/data:[^"]+/data:.../g;print "S0: $pl\n"}
                     if ( $l =~ m/^HELLO/ ) {
                         print $sock "HELLO 0 $DISPATCHID $JOBSENDERTOKEN\n";
                     }

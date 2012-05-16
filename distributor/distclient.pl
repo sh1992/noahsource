@@ -27,7 +27,7 @@ use if $^O eq 'MSWin32', Win32::API;
 use warnings;
 use strict;
 
-our $VERSION = 20120515;
+our $VERSION = 20120516;
 my $USERAGENT = "distclient.pl/$VERSION";
 my $IPC_PORT = 29482;
 
@@ -196,7 +196,7 @@ if ( $^O eq 'MSWin32' ) {
     $CloseHandle = Win32::API->new('kernel32','CloseHandle','N','I')
         or die "Can't access CloseHandle";
 }
-sub DoNice {
+sub Win32Nice {
     my ($pid) = @_;
     return unless $OpenProcess and $SetPriorityClass and $CloseHandle;
     # PROCESS_SET_INFORMATION = 0x0200
@@ -416,7 +416,7 @@ sub SocketThread {
         PostStatus(undef, mode => 'STOPPING');
         foreach my $id ( keys %work ) {
             my $json = to_json({id => $id, error => 'User abort'});
-            print $sock "WORKFAILED $json\n";
+            print $sock "WORKFAILED $json\n" if $sock;
         }
         print "Thread exiting\n";
         # Cleanup
@@ -476,10 +476,13 @@ sub SocketThread {
                 $lastseen = 0;
                 while ( $sockbuf =~ s/^(.*?)\r*\n// ) {
                     my $l = $1;
+                    #print "$l\n";
                     if ( $l =~ m/^HELLO/ ) {
                         print $sock "HELLO $VERSION $hostname $myident\n";
-                        print $sock "THREADS $THREADCOUNT\n";
                         print $sock "PLATFORM $platform\n";
+                    }
+                    elsif ( $l =~ m/^OK/ ) {
+                        print $sock "THREADS $THREADCOUNT\n";
                     }
                     elsif ( $l =~ m/^WORK (.+)/ ) {
                         my $json = $1;
