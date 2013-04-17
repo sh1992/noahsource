@@ -69,6 +69,13 @@ char *compressors[][2] = {
 /* Use same order as spcat_ext and spcat_efile in spcat-obj.h */
 const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
+
+/*
+ORIGINAL NOAH WORK HERE, i am changing things above - seth 4-16-13
+const char input_suffixes[2][4] = {"int", "var"};
+const char output_suffixes[2][4] = {"out", "cat"};
+*/
+
 #define QN_COUNT 2
 /* 4th QN appears with multiple components; indicates component peak is from */
 #define QN_DIGITS 4
@@ -182,14 +189,20 @@ int load_spec_templates(specopts_t *opts) {
     return 50;
   }
   memset(opts->template, 0, sizeof(opts->template));
+  
   for ( i = 0; i < 2; i++ ) {
     FILE *fh;
     sprintf(filename, "%s.%s", opts->template_fn, input_suffixes[i]);
+
     /* Load template */
-    if ( ( fh = fopen(filename, "r") ) == NULL ) {
+    if ( ((fh = fopen(filename, "r")) == NULL)) {
       printf("Failed to open template file: %s\n", strerror(errno));
       free(filename);
       return i+10;
+    }
+    else{
+         printf("Found valid template file %s\n", filename);
+         break; //added else and break so loop ended when proper file found
     }
     fread(opts->template[i], sizeof(opts->template[i]), 1, fh);
     if ( ferror(fh) ) {
@@ -1194,7 +1207,7 @@ int main(int argc, char *argv[]) {
   qprintf(&settings, "Using output file %s\n", specopts.basename_out);
 
   /* Load SPCAT .int & .var input template files */
-  lprintf(&settings, "Loading template files %s.{var,int}\n", specopts.template_fn);
+  lprintf(&settings, "Loading template files %s with type .var and .int\n", specopts.template_fn);
   if ( (rc = load_spec_templates(&specopts)) != 0 ) {
     qprintf(&settings, "load_spec_templates failed: %d\n", rc);
     return rc;

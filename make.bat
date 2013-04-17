@@ -1,4 +1,4 @@
-@echo off
+@echo on
 rem
 rem make.bat - Compile ga-spectroscopy-client using MinGW
 rem
