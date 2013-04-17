@@ -70,12 +70,6 @@ char *compressors[][2] = {
 const char input_suffixes[2][4] = {"int", "var"};
 const char output_suffixes[2][4] = {"out", "cat"};
 
-/*
-ORIGINAL NOAH WORK HERE, i am changing things above - seth 4-16-13
-const char input_suffixes[2][4] = {"int", "var"};
-const char output_suffixes[2][4] = {"out", "cat"};
-*/
-
 #define QN_COUNT 2
 /* 4th QN appears with multiple components; indicates component peak is from */
 #define QN_DIGITS 4
