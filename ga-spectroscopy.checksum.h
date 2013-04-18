@@ -1,0 +1,1 @@
+char *CHECKSUM = "8d25fd7acd81392e39482d48fb7d37a7";
